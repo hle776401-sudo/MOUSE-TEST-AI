@@ -33,16 +33,16 @@ MODEL_COMPLEXITY = 1                # Độ phức tạp model (0 = nhẹ, 1 = �
 # ==============================================================================
 
 # --- MVP: Click ---
-CLICK_DISTANCE_THRESHOLD = 35       # Fallback pixel khi không có palm_size (pixels)
-CLICK_COOLDOWN = 0.3                # Cooldown giữa các lần click (giây)
+CLICK_DISTANCE_THRESHOLD = 40       # Fallback pixel khi không có palm_size (pixels)
+CLICK_COOLDOWN = 0.2                # Cooldown giữa các lần click (giây)
 
 # --- MVP: Pinch (Dùng chung cho Click + Drag) ---
-PINCH_HOLD_THRESHOLD = 0.25         # Giữ pinch > 250ms = drag, < 250ms = click (giây)
-PINCH_THRESHOLD_NORMALIZED = 0.25   # Ngưỡng pinch chuẩn hóa theo palm_size (~25% kích thước tay)
+PINCH_HOLD_THRESHOLD = 0.30         # Giữ pinch > 300ms = drag, < 300ms = click (giây)
+PINCH_THRESHOLD_NORMALIZED = 0.28   # Ngưỡng pinch chuẩn hóa theo palm_size (~28% kích thước tay)
 
 # --- MVP: Scroll ---
-SCROLL_SPEED = 5                    # Tốc độ cuộn (đơn vị scroll/frame)
-SCROLL_SENSITIVITY = 15             # Ngưỡng di chuyển tối thiểu theo trục Y để kích hoạt scroll (pixels)
+SCROLL_SPEED = 12                   # Tốc độ cuộn (đơn vị scroll/frame)
+SCROLL_SENSITIVITY = 10             # Ngưỡng di chuyển tối thiểu theo trục Y để kích hoạt scroll (pixels)
 
 # --- MVP: System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
@@ -60,7 +60,7 @@ SYSTEM_TOGGLE_COOLDOWN = 2.0        # Cooldown sau khi toggle (giây) để trá
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)
 # ==============================================================================
-SMOOTHING_FACTOR = 5                # Hệ số làm mượt (càng cao = càng mượt nhưng phản hồi chậm hơn)
+SMOOTHING_FACTOR = 4                # Hệ số làm mượt (càng cao = càng mượt nhưng phản hồi chậm hơn)
                                     # Công thức: current = previous + (target - previous) / factor
 
 # ==============================================================================

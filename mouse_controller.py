@@ -141,9 +141,10 @@ class MouseController:
         cam_y = clamp(cam_y, cfg.ROI_Y_MIN, cfg.ROI_Y_MAX)
 
         # Step 2: Map từ ROI → màn hình
-        # Đảo trục X (camera mirror): ROI_X_MAX → 0, ROI_X_MIN → screen_w
+        # Frame đã được flip mirror trong main.py (cv2.flip),
+        # nên mapping thẳng (không đảo X nữa)
         screen_x = map_range(cam_x, cfg.ROI_X_MIN, cfg.ROI_X_MAX,
-                             self.screen_w, 0)
+                             0, self.screen_w)
         screen_y = map_range(cam_y, cfg.ROI_Y_MIN, cfg.ROI_Y_MAX,
                              0, self.screen_h)
 
