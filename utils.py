@@ -85,12 +85,15 @@ def map_range(value, in_min, in_max, out_min, out_max):
 
     Returns:
         float: Giá trị đã ánh xạ sang khoảng đầu ra
+               Trả về out_min nếu in_min == in_max (tránh division by zero)
 
     Example:
         # Map tọa độ X từ camera (100-540) sang màn hình (0-1920)
         >>> map_range(320, 100, 540, 0, 1920)
         960.0
     """
+    if in_min == in_max:
+        return out_min
     return np.interp(value, [in_min, in_max], [out_min, out_max])
 
 
@@ -152,12 +155,12 @@ def moving_average(values, window_size):
 
     Args:
         values: List các giá trị
-        window_size: Kích thước cửa sổ trung bình
+        window_size: Kích thước cửa sổ trung bình (phải > 0)
 
     Returns:
         float: Giá trị trung bình của window_size phần tử cuối cùng
     """
-    if not values:
+    if not values or window_size <= 0:
         return 0
 
     window = values[-window_size:]

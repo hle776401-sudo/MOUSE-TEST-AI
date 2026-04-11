@@ -1,0 +1,267 @@
+"""
+main.py - Luồng xử lý chính
+============================
+Hệ thống điều khiển máy tính bằng cử chỉ tay qua Webcam.
+
+Quy trình mỗi frame:
+  1. Đọc frame từ webcam
+  2. Flip mirror (để user thấy tự nhiên)
+  3. HandDetector: detect tay → lấy landmarks, fingers, palm_size
+  4. GestureRecognizer: nhận diện gesture → trả result dict
+  5. MouseController: thực thi action (move, click, drag, scroll)
+  6. Vẽ debug overlay (landmarks, ROI, HUD, visual feedback)
+  7. Hiển thị kết quả → lặp lại
+
+Điều khiển:
+  - Giơ 5 ngón tay giữ 3 giây: Bật/Tắt hệ thống
+  - Nhấn 'q' trên cửa sổ OpenCV: Thoát chương trình
+"""
+
+import cv2
+import time
+import config as cfg
+from hand_tracking import HandDetector
+from gesture_recognition import (
+    GestureRecognizer,
+    GESTURE_NONE, GESTURE_LEFT_CLICK, GESTURE_RIGHT_CLICK,
+    GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END,
+    GESTURE_SCROLL_UP, GESTURE_SCROLL_DOWN,
+    GESTURE_SYSTEM_TOGGLE, GESTURE_OPEN_PALM
+)
+from mouse_controller import MouseController
+
+
+def draw_toggle_progress(frame, progress):
+    """
+    Vẽ progress bar cho system toggle.
+    Hiển thị khi user đang giơ 5 ngón để bật/tắt hệ thống.
+
+    Args:
+        frame: Frame ảnh để vẽ
+        progress: Tiến trình 0.0 - 1.0
+    """
+    if progress <= 0:
+        return
+
+    bar_width = 200
+    bar_height = 20
+    x = (cfg.CAMERA_WIDTH - bar_width) // 2
+    y = cfg.CAMERA_HEIGHT - 50
+
+    # Nền bar (xám)
+    cv2.rectangle(frame, (x, y), (x + bar_width, y + bar_height),
+                  cfg.COLOR_ROI_BORDER, -1)
+
+    # Progress fill (xanh lá → cam theo tiến trình)
+    fill_width = int(bar_width * progress)
+    if progress < 0.7:
+        color = cfg.COLOR_SUCCESS
+    else:
+        color = cfg.COLOR_CLICK  # Cam khi gần hoàn thành
+
+    cv2.rectangle(frame, (x, y), (x + fill_width, y + bar_height),
+                  color, -1)
+
+    # Viền
+    cv2.rectangle(frame, (x, y), (x + bar_width, y + bar_height),
+                  cfg.COLOR_WHITE, 1)
+
+    # Text
+    pct_text = f"Toggle: {int(progress * 100)}%"
+    cv2.putText(frame, pct_text, (x, y - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, cfg.COLOR_WHITE, 1)
+
+
+def draw_gesture_feedback(frame, gesture_name, landmark_list):
+    """
+    Vẽ visual feedback cho gesture hiện tại lên frame.
+    Ví dụ: vòng tròn sáng khi click, đường nối khi drag.
+
+    Args:
+        frame: Frame ảnh để vẽ
+        gesture_name: Tên gesture hiện tại
+        landmark_list: Danh sách landmarks [(id, x, y), ...]
+    """
+    if not landmark_list or len(landmark_list) < 21:
+        return
+
+    thumb_tip = (landmark_list[cfg.THUMB_TIP][1], landmark_list[cfg.THUMB_TIP][2])
+    index_tip = (landmark_list[cfg.INDEX_TIP][1], landmark_list[cfg.INDEX_TIP][2])
+    middle_tip = (landmark_list[cfg.MIDDLE_TIP][1], landmark_list[cfg.MIDDLE_TIP][2])
+
+    # --- Left Click: flash circle tại ngón trỏ ---
+    if gesture_name == GESTURE_LEFT_CLICK:
+        cv2.circle(frame, index_tip, 20, cfg.COLOR_CLICK, 3)
+        cv2.circle(frame, index_tip, 30, cfg.COLOR_CLICK, 1)
+
+    # --- Right Click: flash circle tại ngón giữa ---
+    elif gesture_name == GESTURE_RIGHT_CLICK:
+        cv2.circle(frame, middle_tip, 20, cfg.COLOR_PURPLE, 3)
+        cv2.circle(frame, middle_tip, 30, cfg.COLOR_PURPLE, 1)
+
+    # --- Drag: đường nối thumb-index + highlight ---
+    elif gesture_name in (GESTURE_DRAG_START, GESTURE_DRAGGING):
+        cv2.line(frame, thumb_tip, index_tip, cfg.COLOR_PURPLE, 3)
+        cv2.circle(frame, index_tip, 12, cfg.COLOR_PURPLE, -1)
+        # Label "DRAG"
+        mid_x = (thumb_tip[0] + index_tip[0]) // 2
+        mid_y = (thumb_tip[1] + index_tip[1]) // 2
+        cv2.putText(frame, "DRAG", (mid_x - 20, mid_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, cfg.COLOR_PURPLE, 2)
+
+    elif gesture_name == GESTURE_DRAG_END:
+        cv2.circle(frame, index_tip, 25, cfg.COLOR_SUCCESS, 3)
+
+    # --- Scroll: mũi tên lên/xuống ---
+    elif gesture_name in (GESTURE_SCROLL_UP, GESTURE_SCROLL_DOWN):
+        center_x = cfg.CAMERA_WIDTH // 2
+        if gesture_name == GESTURE_SCROLL_UP:
+            # Mũi tên lên
+            cv2.arrowedLine(frame, (center_x, 80), (center_x, 40),
+                           cfg.COLOR_INFO, 3, tipLength=0.5)
+        else:
+            # Mũi tên xuống
+            cv2.arrowedLine(frame, (center_x, 40), (center_x, 80),
+                           cfg.COLOR_INFO, 3, tipLength=0.5)
+
+
+def main():
+    """
+    Hàm chính — khởi tạo modules, chạy vòng lặp xử lý real-time.
+    """
+    # ==================================================================
+    # 1. KHỞI TẠO
+    # ==================================================================
+    print("=" * 50)
+    print("  AI Mouse Controller - Khởi động...")
+    print("=" * 50)
+
+    # Webcam
+    cap = cv2.VideoCapture(cfg.CAMERA_ID)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_HEIGHT)
+
+    if not cap.isOpened():
+        print("[ERROR] Không thể mở webcam!")
+        return
+
+    # Modules
+    detector = HandDetector()
+    recognizer = GestureRecognizer()
+    controller = MouseController()
+
+    # FPS tracking
+    prev_time = 0
+    fps = 0
+
+    screen_w, screen_h = controller.get_screen_size()
+    print(f"  Webcam: {cfg.CAMERA_WIDTH}x{cfg.CAMERA_HEIGHT}")
+    print(f"  Màn hình: {screen_w}x{screen_h}")
+    print(f"  Smoothing: {cfg.SMOOTHING_FACTOR}")
+    print(f"  System: {'ON' if recognizer.system_active else 'OFF (giơ 5 ngón 3s để bật)'}")
+    print("=" * 50)
+    print("  Nhấn 'q' để thoát")
+    print("=" * 50)
+
+    # ==================================================================
+    # 2. VÒNG LẶP CHÍNH
+    # ==================================================================
+    try:
+        while True:
+            # --- 2A: Đọc frame ---
+            ret, frame = cap.read()
+            if not ret:
+                print("[ERROR] Không đọc được frame từ webcam!")
+                break
+
+            # Flip mirror (để user thấy tự nhiên)
+            frame = cv2.flip(frame, 1)
+
+            # --- 2B: Detect bàn tay ---
+            frame = detector.find_hands(frame, draw=False)
+            landmark_list, bbox = detector.find_position(frame)
+
+            # --- 2C: Xử lý gesture nếu có bàn tay ---
+            gesture_result = None
+
+            if detector.is_hand_detected() and landmark_list:
+                fingers = detector.fingers_up()
+                palm_size = detector.get_palm_size()
+                hand_center = detector.get_hand_center()
+
+                # Nhận diện gesture
+                gesture_result = recognizer.recognize(
+                    landmark_list, fingers, palm_size, hand_center
+                )
+
+                # Thực thi action (chỉ khi system ON)
+                if gesture_result["system_active"]:
+                    controller.process_gesture(gesture_result)
+
+                # --- 2D: Vẽ debug overlay ---
+                # Vẽ custom landmarks
+                detector.draw_custom_landmarks(frame)
+
+                # Visual feedback cho gesture
+                draw_gesture_feedback(
+                    frame,
+                    gesture_result["gesture"],
+                    landmark_list
+                )
+
+                # Bounding box
+                if bbox:
+                    x1, y1, x2, y2 = bbox
+                    color = cfg.COLOR_SUCCESS if gesture_result["system_active"] else cfg.COLOR_DANGER
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+            else:
+                # Không có bàn tay → thông báo cho recognizer (reset states)
+                gesture_result = recognizer.recognize([], [], 0, None)
+
+            # --- 2E: Vẽ ROI ---
+            detector.draw_roi(frame)
+
+            # --- 2F: Toggle progress bar ---
+            toggle_progress = recognizer.get_toggle_progress()
+            draw_toggle_progress(frame, toggle_progress)
+
+            # --- 2G: FPS ---
+            current_time = time.time()
+            if current_time - prev_time > 0:
+                fps = 1 / (current_time - prev_time)
+            prev_time = current_time
+
+            # --- 2H: HUD ---
+            gesture_name = gesture_result["gesture"] if gesture_result else GESTURE_NONE
+            system_active = gesture_result["system_active"] if gesture_result else False
+            detector.draw_info(frame, fps, gesture_name, system_active)
+
+            # --- 2I: Hiển thị ---
+            cv2.imshow(cfg.WINDOW_NAME, frame)
+
+            # --- 2J: Thoát ---
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q') or key == ord('Q'):
+                print("\n[INFO] Thoát chương trình...")
+                break
+
+    except KeyboardInterrupt:
+        print("\n[INFO] Ngắt bằng Ctrl+C...")
+
+    finally:
+        # ==================================================================
+        # 3. DỌN DẸP TÀI NGUYÊN
+        # ==================================================================
+        # Thả chuột nếu đang drag
+        if controller.is_dragging:
+            controller.drag_end()
+
+        cap.release()
+        detector.release()
+        cv2.destroyAllWindows()
+        print("[INFO] Đã giải phóng tài nguyên. Tạm biệt!")
+
+
+if __name__ == "__main__":
+    main()

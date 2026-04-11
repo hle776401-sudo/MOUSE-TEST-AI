@@ -32,34 +32,30 @@ MODEL_COMPLEXITY = 1                # Độ phức tạp model (0 = nhẹ, 1 = �
 # 3. NGƯỠNG CỬ CHỈ (GESTURE THRESHOLDS)
 # ==============================================================================
 
-# --- Click ---
-CLICK_DISTANCE_THRESHOLD = 35       # Khoảng cách tối đa giữa 2 ngón để nhận diện "chạm" (pixels)
+# --- MVP: Click ---
+CLICK_DISTANCE_THRESHOLD = 35       # Fallback pixel khi không có palm_size (pixels)
+CLICK_COOLDOWN = 0.3                # Cooldown giữa các lần click (giây)
 
-# --- Double Click ---
-DOUBLE_CLICK_TIME_WINDOW = 0.5      # Thời gian tối đa giữa 2 lần click để thành double click (giây)
-CLICK_COOLDOWN = 0.3                # Thời gian cooldown giữa các lần click đơn (giây)
+# --- MVP: Pinch (Dùng chung cho Click + Drag) ---
+PINCH_HOLD_THRESHOLD = 0.25         # Giữ pinch > 250ms = drag, < 250ms = click (giây)
+PINCH_THRESHOLD_NORMALIZED = 0.25   # Ngưỡng pinch chuẩn hóa theo palm_size (~25% kích thước tay)
 
-# --- Drag and Drop ---
-DRAG_FINGER_DISTANCE = 40           # Khoảng cách tối đa giữa ngón trỏ và ngón giữa để nhận diện "khép" (pixels)
-
-# --- Scroll ---
-SCROLL_SPEED = 5                    # Tốc độ cuộn (pixels/frame)
+# --- MVP: Scroll ---
+SCROLL_SPEED = 5                    # Tốc độ cuộn (đơn vị scroll/frame)
 SCROLL_SENSITIVITY = 15             # Ngưỡng di chuyển tối thiểu theo trục Y để kích hoạt scroll (pixels)
-FIST_THRESHOLD = 50                 # Ngưỡng khoảng cách trung bình giữa các đầu ngón tay và cổ tay để nhận nắm tay
 
-# --- Zoom ---
-ZOOM_SENSITIVITY = 5                # Ngưỡng thay đổi khoảng cách tối thiểu để kích hoạt zoom (pixels)
-ZOOM_SPEED = 3                      # Số lần nhấn Ctrl +/- mỗi lần zoom
-ZOOM_COOLDOWN = 0.15                # Cooldown giữa các lần zoom (giây)
-
-# --- System Toggle (Bật/Tắt hệ thống) ---
+# --- MVP: System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
 SYSTEM_TOGGLE_HOLD_TIME = 3.0       # Thời gian giữ (giây) để kích hoạt/tắt hệ thống
 SYSTEM_TOGGLE_COOLDOWN = 2.0        # Cooldown sau khi toggle (giây) để tránh toggle liên tục
 
-# --- Pinch (Dùng chung cho Click + Drag) ---
-PINCH_HOLD_THRESHOLD = 0.25         # Giữ pinch > 250ms = drag, < 250ms = click (giây)
-PINCH_THRESHOLD_NORMALIZED = 0.25   # Ngưỡng pinch chuẩn hóa theo palm_size (~25% kích thước tay)
+# --- Phase 2: Double Click (chưa dùng trong MVP) ---
+# DOUBLE_CLICK_TIME_WINDOW = 0.5    # Thời gian tối đa giữa 2 click để thành double click
+
+# --- Phase 2: Zoom (chưa dùng trong MVP) ---
+# ZOOM_SENSITIVITY = 5              # Ngưỡng thay đổi khoảng cách tối thiểu để kích hoạt zoom
+# ZOOM_SPEED = 3                    # Số lần nhấn Ctrl +/- mỗi lần zoom
+# ZOOM_COOLDOWN = 0.15              # Cooldown giữa các lần zoom
 
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)

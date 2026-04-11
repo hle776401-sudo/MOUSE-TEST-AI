@@ -156,16 +156,19 @@ class HandDetector:
 
         return self.landmark_list, bounding_box
 
-    def fingers_up(self):
+    def fingers_up(self, hand_index=0):
         """
         Xác định ngón tay nào đang giơ lên (mở).
 
         Logic:
         - Ngón cái: So sánh theo trục X (do ngón cái mở ngang)
-          + Tay phải: TIP.x > IP.x => giơ lên
-          + Tay trái: TIP.x < IP.x => giơ lên
+          + Tay phải (camera): TIP.x < IP.x => giơ lên
+          + Tay trái (camera): TIP.x > IP.x => giơ lên
         - 4 ngón còn lại: So sánh theo trục Y
           + TIP.y < PIP.y => giơ lên (vì trục Y ngược trong ảnh)
+
+        Args:
+            hand_index: Index bàn tay cần kiểm tra (khớp với find_position)
 
         Returns:
             fingers: List 5 phần tử [thumb, index, middle, ring, pinky]
@@ -178,10 +181,11 @@ class HandDetector:
             return fingers
 
         # --- Xác định tay trái hay tay phải ---
-        # Dựa vào handedness từ MediaPipe
+        # Dựa vào handedness từ MediaPipe, khớp đúng hand_index
         is_right_hand = True  # Mặc định
-        if self.results and self.results.multi_handedness:
-            handedness = self.results.multi_handedness[0]
+        if (self.results and self.results.multi_handedness and
+                hand_index < len(self.results.multi_handedness)):
+            handedness = self.results.multi_handedness[hand_index]
             label = handedness.classification[0].label
             # MediaPipe trả về "Right"/"Left" theo góc nhìn của camera (mirror)
             # Trong hệ tọa độ camera: "Right" thực ra là tay trái người dùng
