@@ -84,6 +84,7 @@ class GestureRecognizer:
         self._toggle_start_time = 0
         self._toggle_active = False
         self._toggle_cooldown_time = 0
+        self._five_fingers_start = 0     # Thời điểm bắt đầu thấy 5 ngón (grace period)
 
         # --- Unified Pinch (Click + Drag + Double Click) ---
         self.pinch_state = PinchState.IDLE
@@ -162,6 +163,8 @@ class GestureRecognizer:
                 result["gesture"] = GESTURE_OPEN_PALM
             self._reset_continuous_states()
             self.current_gesture = result["gesture"]
+            # Vẫn cập nhật prev positions để toggle track được chuyển động
+            self._update_prev_positions(landmark_list, hand_center)
             return result
 
         # ------------------------------------------------------------------
@@ -260,8 +263,13 @@ class GestureRecognizer:
     # ======================================================================
     def _check_system_toggle(self, fingers, hand_center, now):
         """
-        Rule: Giơ 5 ngón tay giữ >= SYSTEM_TOGGLE_HOLD_TIME giây.
-        Có cooldown để tránh toggle liên tục.
+        Rule: Giơ 5 ngón tay giữ yên >= SYSTEM_TOGGLE_HOLD_TIME giây.
+
+        Grace period:
+          - 5 ngón xuất hiện lần đầu → bắt đầu grace (0.4s)
+          - Trong grace period: return None → cho swipe chạy
+          - Sau grace (tay giữ yên) → bắt đầu đếm toggle + hiện OPEN_PALM
+          - Nếu tay di chuyển ngang nhanh bất cứ lúc nào → reset, nhường cho swipe
         """
         if not cooldown_passed(self._toggle_cooldown_time,
                                cfg.SYSTEM_TOGGLE_COOLDOWN, now):
@@ -270,19 +278,31 @@ class GestureRecognizer:
         finger_count = sum(fingers)
 
         if finger_count == cfg.SYSTEM_TOGGLE_FINGERS:
-            # Bypass toggle nếu đang track swipe (tay đang di chuyển)
+            # Bypass nếu đang track swipe
             if self._swipe_tracking:
                 self._toggle_active = False
+                self._five_fingers_start = 0
                 return None
 
-            # Nếu tay đang di chuyển ngang nhanh → có thể là swipe
+            # Bypass nếu tay đang di chuyển ngang nhanh
             if (self._prev_hand_center is not None and
                     hand_center is not None):
                 dx = abs(hand_center[0] - self._prev_hand_center[0])
                 if dx > cfg.SWIPE_THRESHOLD_X * 0.3:
                     self._toggle_active = False
+                    self._five_fingers_start = 0
                     return None
 
+            # Grace period: lần đầu thấy 5 ngón
+            if self._five_fingers_start == 0:
+                self._five_fingers_start = now
+                return None  # Cho swipe có cơ hội check trước
+
+            # Vẫn trong grace period?
+            if (now - self._five_fingers_start) < cfg.OPEN_PALM_GRACE_PERIOD:
+                return None  # Vẫn cho swipe chạy
+
+            # Hết grace period, tay giữ yên → bắt đầu toggle
             if not self._toggle_active:
                 self._toggle_start_time = now
                 self._toggle_active = True
@@ -293,12 +313,14 @@ class GestureRecognizer:
                 self.system_active = not self.system_active
                 self._toggle_active = False
                 self._toggle_cooldown_time = now
+                self._five_fingers_start = 0
                 self._reset_continuous_states()
                 return GESTURE_SYSTEM_TOGGLE
 
             return GESTURE_OPEN_PALM
         else:
             self._toggle_active = False
+            self._five_fingers_start = 0
             return None
 
     # ======================================================================
@@ -466,10 +488,9 @@ class GestureRecognizer:
         # Đang tracking → kiểm tra điều kiện
         elapsed = now - self._swipe_start_time
 
-        # Timeout: nếu quá lâu mà chưa swipe → reset
+        # Timeout: tay mở nhưng không vuốt đủ nhanh → tắt tracking, nhường cho toggle
         if elapsed > cfg.SWIPE_TIME_WINDOW:
-            self._swipe_start_x = current_x
-            self._swipe_start_time = now
+            self._swipe_tracking = False
             return None
 
         # Tính delta X
@@ -525,13 +546,15 @@ class GestureRecognizer:
     # PRIVATE: HELPER METHODS
     # ======================================================================
     def _reset_continuous_states(self):
-        """Reset tất cả trạng thái khi mất tracking hoặc system toggle."""
+        """Reset trạng thái gesture (không reset toggle — toggle tự quản lý)."""
         self.pinch_state = PinchState.IDLE
         self._is_pinching_prev = False
         self._scroll_prev_y = None
         self._right_click_was_pinching = False
         self._swipe_tracking = False
         self._waiting_double = False
+        # Lưu ý: KHÔNG reset _five_fingers_start và _toggle_active ở đây
+        # Toggle phải tự quản lý state để hoạt động cả khi system OFF
         self._prev_index_pos = None
         self._prev_hand_center = None
 

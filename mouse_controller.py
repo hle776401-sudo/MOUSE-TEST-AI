@@ -65,16 +65,12 @@ class MouseController:
             if gesture_result["cursor_pos"]:
                 self.move_cursor(gesture_result["cursor_pos"])
 
-        # --- Left Click ---
+        # --- Left Click (không move cursor — vị trí đã đúng từ frame MOVE trước) ---
         elif gesture == GESTURE_LEFT_CLICK:
-            if gesture_result["cursor_pos"]:
-                self.move_cursor(gesture_result["cursor_pos"])
             self.left_click()
 
         # --- Double Click ---
         elif gesture == GESTURE_DOUBLE_CLICK:
-            if gesture_result["cursor_pos"]:
-                self.move_cursor(gesture_result["cursor_pos"])
             self.double_click()
 
         # --- Right Click ---
@@ -169,16 +165,16 @@ class MouseController:
 
     def swipe_action(self, gesture_name):
         """
-        Hành động swipe — hiện tại chỉ demo (print).
-        Có thể mở rộng thành Alt+Left/Right cho trình duyệt.
+        Hành động swipe:
+          Swipe Left  → Alt+Left  (Back trên trình duyệt / Explorer)
+          Swipe Right → Alt+Right (Forward trên trình duyệt / Explorer)
         """
-        # Demo mode: chỉ print log
-        print(f"[SWIPE] {gesture_name}")
-        # TODO: Uncomment để map sang hotkey
-        # if gesture_name == "Swipe Left":
-        #     pyautogui.hotkey('alt', 'left')   # Back
-        # elif gesture_name == "Swipe Right":
-        #     pyautogui.hotkey('alt', 'right')  # Forward
+        if gesture_name == "Swipe Left":
+            pyautogui.hotkey('alt', 'left')
+            print("[SWIPE] ← Back")
+        elif gesture_name == "Swipe Right":
+            pyautogui.hotkey('alt', 'right')
+            print("[SWIPE] → Forward")
 
     def get_screen_size(self):
         return (self.screen_w, self.screen_h)

@@ -57,6 +57,8 @@ SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
 SYSTEM_TOGGLE_HOLD_TIME = 3.0       # Thời gian giữ (giây) để kích hoạt/tắt hệ thống
 SYSTEM_TOGGLE_COOLDOWN = 2.0        # Cooldown sau khi toggle (giây)
+OPEN_PALM_GRACE_PERIOD = 0.4        # Grace period: 5 ngón phải giữ yên 0.4s trước khi
+                                    # bắt đầu đếm toggle (cho swipe có cơ hội chạy trước)
 
 # --- Stability (Ổn định gesture) ---
 POST_ACTION_COOLDOWN = 0.15         # Neutral gap sau event gestures (click, swipe) (giây)
