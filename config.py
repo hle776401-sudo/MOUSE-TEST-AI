@@ -32,30 +32,39 @@ MODEL_COMPLEXITY = 1                # Độ phức tạp model (0 = nhẹ, 1 = �
 # 3. NGƯỠNG CỬ CHỈ (GESTURE THRESHOLDS)
 # ==============================================================================
 
-# --- MVP: Click ---
+# --- Pinch (Dùng chung cho Click + Drag) ---
 CLICK_DISTANCE_THRESHOLD = 40       # Fallback pixel khi không có palm_size (pixels)
 CLICK_COOLDOWN = 0.2                # Cooldown giữa các lần click (giây)
-
-# --- MVP: Pinch (Dùng chung cho Click + Drag) ---
 PINCH_HOLD_THRESHOLD = 0.30         # Giữ pinch > 300ms = drag, < 300ms = click (giây)
-PINCH_THRESHOLD_NORMALIZED = 0.28   # Ngưỡng pinch chuẩn hóa theo palm_size (~28% kích thước tay)
+PINCH_THRESHOLD_NORMALIZED = 0.28   # Ngưỡng pinch ENTER (~28% kích thước tay)
+PINCH_EXIT_MULTIPLIER = 1.3         # Hysteresis: exit = enter * 1.3 (tránh flickering ở biên)
 
-# --- MVP: Scroll ---
+# --- Double Click ---
+DOUBLE_CLICK_TIME_WINDOW = 0.5      # Thời gian tối đa giữa 2 left click để thành double click (giây)
+DOUBLE_CLICK_COOLDOWN = 0.5         # Cooldown sau double click (giây)
+
+# --- Scroll ---
 SCROLL_SPEED = 12                   # Tốc độ cuộn (đơn vị scroll/frame)
-SCROLL_SENSITIVITY = 10             # Ngưỡng di chuyển tối thiểu theo trục Y để kích hoạt scroll (pixels)
+SCROLL_SENSITIVITY = 10             # Ngưỡng di chuyển tối thiểu theo trục Y (pixels)
 
-# --- MVP: System Toggle (Bật/Tắt hệ thống) ---
+# --- Swipe ---
+SWIPE_MIN_FINGERS = 4               # Số ngón tối thiểu phải giơ để nhận swipe
+SWIPE_THRESHOLD_X = 80              # Di chuyển ngang tối thiểu để trigger swipe (pixels)
+SWIPE_TIME_WINDOW = 0.5             # Thời gian tối đa cho 1 lần swipe (giây)
+SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
+
+# --- System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
 SYSTEM_TOGGLE_HOLD_TIME = 3.0       # Thời gian giữ (giây) để kích hoạt/tắt hệ thống
-SYSTEM_TOGGLE_COOLDOWN = 2.0        # Cooldown sau khi toggle (giây) để tránh toggle liên tục
+SYSTEM_TOGGLE_COOLDOWN = 2.0        # Cooldown sau khi toggle (giây)
 
-# --- Phase 2: Double Click (chưa dùng trong MVP) ---
-# DOUBLE_CLICK_TIME_WINDOW = 0.5    # Thời gian tối đa giữa 2 click để thành double click
+# --- Stability (Ổn định gesture) ---
+POST_ACTION_COOLDOWN = 0.15         # Neutral gap sau event gestures (click, swipe) (giây)
 
-# --- Phase 2: Zoom (chưa dùng trong MVP) ---
-# ZOOM_SENSITIVITY = 5              # Ngưỡng thay đổi khoảng cách tối thiểu để kích hoạt zoom
-# ZOOM_SPEED = 3                    # Số lần nhấn Ctrl +/- mỗi lần zoom
-# ZOOM_COOLDOWN = 0.15              # Cooldown giữa các lần zoom
+# --- Phase 2: Zoom (chưa dùng) ---
+# ZOOM_SENSITIVITY = 5
+# ZOOM_SPEED = 3
+# ZOOM_COOLDOWN = 0.15
 
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)
@@ -68,13 +77,15 @@ SMOOTHING_FACTOR = 4                # Hệ số làm mượt (càng cao = càng 
 # ==============================================================================
 COLOR_PRIMARY = (255, 165, 0)       # Cam - màu chính cho landmarks
 COLOR_SECONDARY = (0, 255, 255)     # Vàng - màu phụ
-COLOR_SUCCESS = (0, 255, 0)         # Xanh lá - trạng thái thành công / hệ thống ON
-COLOR_DANGER = (0, 0, 255)          # Đỏ - trạng thái lỗi / hệ thống OFF
+COLOR_SUCCESS = (0, 255, 0)         # Xanh lá - hệ thống ON / thành công
+COLOR_DANGER = (0, 0, 255)          # Đỏ - hệ thống OFF / lỗi
 COLOR_INFO = (255, 255, 0)          # Cyan - thông tin
 COLOR_WHITE = (255, 255, 255)       # Trắng
 COLOR_BLACK = (0, 0, 0)             # Đen
 COLOR_PURPLE = (255, 0, 128)        # Tím - drag indicator
 COLOR_CLICK = (0, 200, 255)         # Cam nhạt - click indicator
+COLOR_DOUBLE_CLICK = (0, 255, 255)  # Vàng - double click indicator
+COLOR_SWIPE = (255, 100, 50)        # Xanh dương nhạt - swipe indicator
 COLOR_ROI_BORDER = (100, 100, 100)  # Xám - viền ROI
 
 # --- Landmarks ---
@@ -86,12 +97,17 @@ CONNECTION_THICKNESS = 2            # Độ dày đường nối giữa các lan
 # 6. HIỂN THỊ (DISPLAY / UI)
 # ==============================================================================
 WINDOW_NAME = "AI Mouse Controller"
-FONT = None                         # Sẽ dùng cv2.FONT_HERSHEY_SIMPLEX (gán trong code)
-FONT_SCALE = 0.7                    # Kích thước font chữ
-FONT_THICKNESS = 2                  # Độ dày font chữ
+FONT_SCALE = 0.7                    # Kích thước font chữ HUD nhỏ
+FONT_THICKNESS = 2                  # Độ dày font chữ HUD
 FPS_POSITION = (10, 30)             # Vị trí hiển thị FPS
 GESTURE_POSITION = (10, 70)         # Vị trí hiển thị cử chỉ hiện tại
 STATUS_POSITION = (10, 110)         # Vị trí hiển thị trạng thái hệ thống
+
+# --- Demo Banner (text gesture lớn ở trung tâm-trên) ---
+BANNER_FONT_SCALE = 1.2             # Font to cho banner gesture
+BANNER_FONT_THICKNESS = 3           # Font dày cho banner
+BANNER_Y = 55                       # Vị trí Y của banner (từ trên xuống)
+BANNER_LINGER_FRAMES = 12           # Event gesture (click/swipe) giữ banner bao nhiêu frame
 
 # ==============================================================================
 # 7. LANDMARK IDS (Tham chiếu MediaPipe Hand Landmarks)
@@ -145,4 +161,4 @@ FINGER_PIPS = [THUMB_IP, INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP]
 # ==============================================================================
 # 8. TRẠNG THÁI HỆ THỐNG
 # ==============================================================================
-SYSTEM_ACTIVE_DEFAULT = False       # Hệ thống mặc định TẮT khi khởi động (cần cử chỉ để bật)
+SYSTEM_ACTIVE_DEFAULT = False       # Hệ thống mặc định TẮT khi khởi động
