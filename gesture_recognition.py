@@ -6,6 +6,7 @@ Phân tích dữ liệu landmarks từ HandDetector để nhận diện cử ch�
 Kiến trúc:
   - GestureRecognizer: Class chính xử lý nhận diện
   - Unified Pinch Handler: Click + Drag + Double Click trong 1 flow
+  - Zoom Handler: Index + Middle guard, thumb-index distance delta
   - Swipe Handler: Open palm + chuyển động ngang nhanh
   - Hysteresis: Ngưỡng enter/exit riêng để tránh flickering
   - Post-action cooldown: Neutral gap sau event gestures
@@ -18,7 +19,8 @@ Gestures:
   5. Drag and Drop    - Thumb + Index pinch giữ lâu (>= 300ms)
   6. Scroll           - Nắm tay + di chuyển dọc
   7. Swipe Left/Right - Mở bàn tay + vuốt ngang nhanh
-  8. System On/Off    - 5 ngón tay giơ + giữ 3 giây
+  8. Zoom In/Out      - Index + Middle guard, thumb-index distance delta
+  9. System On/Off    - 5 ngón tay giơ + giữ 3 giây
 """
 
 import time
@@ -41,6 +43,8 @@ GESTURE_SCROLL_UP = "Scroll Up"
 GESTURE_SCROLL_DOWN = "Scroll Down"
 GESTURE_SWIPE_LEFT = "Swipe Left"
 GESTURE_SWIPE_RIGHT = "Swipe Right"
+GESTURE_ZOOM_IN = "Zoom In"
+GESTURE_ZOOM_OUT = "Zoom Out"
 GESTURE_SYSTEM_TOGGLE = "System Toggle"
 GESTURE_OPEN_PALM = "Open Palm"
 
@@ -108,6 +112,12 @@ class GestureRecognizer:
         self._swipe_start_x = 0        # Vị trí X khi bắt đầu track
         self._swipe_start_time = 0     # Thời điểm bắt đầu track
         self._swipe_cooldown_time = 0  # Cooldown sau khi swipe
+
+        # --- Zoom (1 tay: index + middle guard) ---
+        self._zoom_active = False       # Đang ở zoom mode?
+        self._zoom_prev_distance = 0    # Khoảng cách thumb-index frame trước
+        self._zoom_delta_acc = 0        # Accumulator delta (gom nhiều frame nhỏ)
+        self._zoom_cooldown_time = 0    # Cooldown sau zoom trigger
 
         # --- Post-action cooldown ---
         self._post_action_time = 0     # Thời điểm event cuối (click/swipe/etc.)
@@ -186,7 +196,7 @@ class GestureRecognizer:
 
         # ------------------------------------------------------------------
         # STEP 2: NHẬN DIỆN CỬ CHỈ (System ON)
-        # Priority: Pinch (Click/Drag) > Right Click > Swipe > Scroll > Move
+        # Priority: Pinch > Zoom > Right Click > Swipe > Scroll > Move
         # ------------------------------------------------------------------
 
         # Lấy tọa độ landmarks
@@ -203,6 +213,7 @@ class GestureRecognizer:
         pinch_exit = pinch_enter * cfg.PINCH_EXIT_MULTIPLIER
 
         # --- 2A: UNIFIED PINCH — Click + Drag + Double Click ---
+        # Guard: khi fingers[2]==1 (ngón giữa giơ) → Pinch skip, nhường Zoom
         pinch_result = self._check_pinch_action(
             fingers, index_tip, thumb_index_dist,
             pinch_enter, pinch_exit, now
@@ -217,7 +228,17 @@ class GestureRecognizer:
             self._update_prev_positions(landmark_list, hand_center)
             return result
 
-        # --- 2B: RIGHT CLICK ---
+        # --- 2B: ZOOM IN / OUT ---
+        # Guard gesture: index + middle up, ring + pinky down
+        # Thumb-index distance delta → Zoom In (tăng) / Zoom Out (giảm)
+        zoom_result = self._check_zoom(fingers, thumb_index_dist, now)
+        if zoom_result is not None:
+            result["gesture"] = zoom_result
+            self.current_gesture = zoom_result
+            self._update_prev_positions(landmark_list, hand_center)
+            return result
+
+        # --- 2C: RIGHT CLICK (chỉ khi KHÔNG ở zoom mode) ---
         right_click_result = self._check_right_click(
             fingers, thumb_middle_dist, pinch_enter, pinch_exit, now
         )
@@ -340,6 +361,11 @@ class GestureRecognizer:
           - Left Click lần 1 → bắn ngay + ghi nhận thời điểm
           - Left Click lần 2 trong DOUBLE_CLICK_TIME_WINDOW → bắn DOUBLE_CLICK
         """
+        # GUARD: Ngón giữa giơ = zoom mode → skip Pinch
+        # Trừ khi đang DRAGGING (cho phép kết thúc drag dù ngón giữa giơ)
+        if fingers[2] == 1 and self.pinch_state != PinchState.DRAGGING:
+            return None
+
         # Hysteresis: dùng threshold khác nhau cho enter vs exit
         if self._is_pinching_prev:
             is_pinching = thumb_index_dist < exit_threshold
@@ -442,6 +468,68 @@ class GestureRecognizer:
                 return GESTURE_RIGHT_CLICK
 
         self._right_click_was_pinching = is_pinching
+        return None
+
+    # ======================================================================
+    # PRIVATE: ZOOM IN / OUT
+    # ======================================================================
+    def _check_zoom(self, fingers, thumb_index_dist, now):
+        """
+        Rule: Zoom mode = index + middle giơ, ring + pinky cụp.
+        Thumb tự do — khoảng cách thumb-index thay đổi xác định hướng zoom.
+
+        Logic:
+          - Vào zoom mode → ghi prev_distance, chờ frame tiếp
+          - Mỗi frame → tính delta, cộng dồn vào accumulator
+          - Accumulator > threshold → ZOOM_IN (khoảng cách tăng)
+          - Accumulator < -threshold → ZOOM_OUT (khoảng cách giảm)
+          - Ra khỏi zoom mode → reset toàn bộ state
+        """
+        # Kiểm tra zoom mode: index up, middle up, ring down, pinky down
+        is_zoom_mode = (
+            fingers[1] == 1 and
+            fingers[2] == 1 and
+            fingers[3] == 0 and
+            fingers[4] == 0
+        )
+
+        if not is_zoom_mode:
+            # Ra khỏi zoom mode → reset
+            if self._zoom_active:
+                self._zoom_active = False
+                self._zoom_prev_distance = 0
+                self._zoom_delta_acc = 0
+            return None
+
+        # Vào zoom mode lần đầu
+        if not self._zoom_active:
+            self._zoom_active = True
+            self._zoom_prev_distance = thumb_index_dist
+            self._zoom_delta_acc = 0
+            return None  # Chờ frame tiếp để tính delta
+
+        # Tính delta và cộng dồn vào accumulator
+        delta = thumb_index_dist - self._zoom_prev_distance
+        self._zoom_prev_distance = thumb_index_dist
+        self._zoom_delta_acc += delta
+
+        # Kiểm tra cooldown
+        if not cooldown_passed(self._zoom_cooldown_time, cfg.ZOOM_COOLDOWN, now):
+            return None
+
+        # Trigger zoom khi accumulator vượt ngưỡng
+        if self._zoom_delta_acc > cfg.ZOOM_DELTA_THRESHOLD:
+            self._zoom_delta_acc = 0
+            self._zoom_cooldown_time = now
+            self._post_action_time = now
+            return GESTURE_ZOOM_IN
+
+        if self._zoom_delta_acc < -cfg.ZOOM_DELTA_THRESHOLD:
+            self._zoom_delta_acc = 0
+            self._zoom_cooldown_time = now
+            self._post_action_time = now
+            return GESTURE_ZOOM_OUT
+
         return None
 
     # ======================================================================
@@ -553,6 +641,9 @@ class GestureRecognizer:
         self._right_click_was_pinching = False
         self._swipe_tracking = False
         self._waiting_double = False
+        self._zoom_active = False
+        self._zoom_prev_distance = 0
+        self._zoom_delta_acc = 0
         # Lưu ý: KHÔNG reset _five_fingers_start và _toggle_active ở đây
         # Toggle phải tự quản lý state để hoạt động cả khi system OFF
         self._prev_index_pos = None

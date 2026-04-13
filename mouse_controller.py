@@ -55,7 +55,8 @@ class MouseController:
             GESTURE_RIGHT_CLICK,
             GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END,
             GESTURE_SCROLL_UP, GESTURE_SCROLL_DOWN,
-            GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT
+            GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+            GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT
         )
 
         gesture = gesture_result["gesture"]
@@ -97,9 +98,15 @@ class MouseController:
             if gesture_result["scroll_delta"] is not None:
                 self.scroll(gesture_result["scroll_delta"])
 
-        # --- Swipe (demo: chỉ hiển thị, chưa thực hiện action) ---
+        # --- Swipe ---
         elif gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT):
             self.swipe_action(gesture)
+
+        # --- Zoom ---
+        elif gesture == GESTURE_ZOOM_IN:
+            self.zoom_in()
+        elif gesture == GESTURE_ZOOM_OUT:
+            self.zoom_out()
 
     def move_cursor(self, camera_pos):
         """Di chuyển chuột với smoothing + ROI mapping."""
@@ -175,6 +182,19 @@ class MouseController:
         elif gesture_name == "Swipe Right":
             pyautogui.hotkey('alt', 'right')
             print("[SWIPE] → Forward")
+
+    def zoom_in(self):
+        """
+        Zoom In → Ctrl + =
+        Dùng '=' thay vì '+' vì trên Windows,
+        phím + thực tế là Shift+=. Ctrl+= hoạt động
+        ổn định hơn trên mọi keyboard layout.
+        """
+        pyautogui.hotkey('ctrl', '=')
+
+    def zoom_out(self):
+        """Zoom Out → Ctrl + -"""
+        pyautogui.hotkey('ctrl', '-')
 
     def get_screen_size(self):
         return (self.screen_w, self.screen_h)

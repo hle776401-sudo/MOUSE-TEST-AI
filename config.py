@@ -63,10 +63,10 @@ OPEN_PALM_GRACE_PERIOD = 0.4        # Grace period: 5 ngón phải giữ yên 0.
 # --- Stability (Ổn định gesture) ---
 POST_ACTION_COOLDOWN = 0.15         # Neutral gap sau event gestures (click, swipe) (giây)
 
-# --- Phase 2: Zoom (chưa dùng) ---
-# ZOOM_SENSITIVITY = 5
-# ZOOM_SPEED = 3
-# ZOOM_COOLDOWN = 0.15
+# --- Zoom (1 tay: index + middle guard, thumb-index distance delta) ---
+ZOOM_DELTA_THRESHOLD = 15           # Delta tích lũy tối thiểu để trigger zoom (pixels)
+                                    # Accumulator gom nhiều frame nhỏ → 1 trigger ổn định
+ZOOM_COOLDOWN = 0.25                # Cooldown giữa các lần zoom (giây)
 
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)
@@ -88,6 +88,7 @@ COLOR_PURPLE = (255, 0, 128)        # Tím - drag indicator
 COLOR_CLICK = (0, 200, 255)         # Cam nhạt - click indicator
 COLOR_DOUBLE_CLICK = (0, 255, 255)  # Vàng - double click indicator
 COLOR_SWIPE = (255, 100, 50)        # Xanh dương nhạt - swipe indicator
+COLOR_ZOOM = (0, 220, 0)            # Xanh lá sáng - zoom indicator
 COLOR_ROI_BORDER = (100, 100, 100)  # Xám - viền ROI
 
 # --- Landmarks ---

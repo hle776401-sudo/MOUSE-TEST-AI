@@ -33,6 +33,7 @@ from gesture_recognition import (
     GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END,
     GESTURE_SCROLL_UP, GESTURE_SCROLL_DOWN,
     GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+    GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT,
     GESTURE_SYSTEM_TOGGLE, GESTURE_OPEN_PALM
 )
 from mouse_controller import MouseController
@@ -54,6 +55,8 @@ GESTURE_COLORS = {
     GESTURE_SCROLL_DOWN:  cfg.COLOR_INFO,
     GESTURE_SWIPE_LEFT:   cfg.COLOR_SWIPE,
     GESTURE_SWIPE_RIGHT:  cfg.COLOR_SWIPE,
+    GESTURE_ZOOM_IN:      cfg.COLOR_ZOOM,
+    GESTURE_ZOOM_OUT:     cfg.COLOR_ZOOM,
     GESTURE_SYSTEM_TOGGLE: cfg.COLOR_SUCCESS,
     GESTURE_OPEN_PALM:    cfg.COLOR_SECONDARY,
 }
@@ -241,6 +244,17 @@ def draw_gesture_feedback(frame, gesture_name, landmark_list):
         cv2.putText(frame, ">>", (340, cy - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, cfg.COLOR_SWIPE, 3)
 
+    # --- Zoom: đường nối thumb-index + text ---
+    elif gesture_name in (GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+        cv2.line(frame, thumb_tip, index_tip, cfg.COLOR_ZOOM, 3)
+        cv2.circle(frame, thumb_tip, 8, cfg.COLOR_ZOOM, -1)
+        cv2.circle(frame, index_tip, 8, cfg.COLOR_ZOOM, -1)
+        mid_x = (thumb_tip[0] + index_tip[0]) // 2
+        mid_y = (thumb_tip[1] + index_tip[1]) // 2
+        label = "ZOOM IN" if gesture_name == GESTURE_ZOOM_IN else "ZOOM OUT"
+        cv2.putText(frame, label, (mid_x - 30, mid_y - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, cfg.COLOR_ZOOM, 2)
+
 
 # ==============================================================================
 # EVENT GESTURES (dùng để xác định linger)
@@ -248,6 +262,7 @@ def draw_gesture_feedback(frame, gesture_name, landmark_list):
 EVENT_GESTURES = {
     GESTURE_LEFT_CLICK, GESTURE_DOUBLE_CLICK, GESTURE_RIGHT_CLICK,
     GESTURE_DRAG_END, GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+    GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT,
     GESTURE_SYSTEM_TOGGLE
 }
 
