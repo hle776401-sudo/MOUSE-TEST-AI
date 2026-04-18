@@ -68,13 +68,15 @@ class GestureRecognizer:
 
     Pipeline mỗi frame:
     1. System Toggle (ưu tiên cao nhất, luôn check)
-    2. Nếu system ON → priority: Pinch > Right Click > Swipe > Scroll > Move
-    3. Hysteresis + post-action cooldown chống loạn gesture
+    2. Nếu system ON → priority:
+       Pinch (Click/Drag) > Zoom > Right Click > Swipe > Scroll > Move
+    3. Hysteresis + post-action cooldown + frame stability chống loạn
 
     Attributes:
         system_active: Trạng thái hệ thống ON/OFF
         pinch_state: Trạng thái pinch hiện tại
         current_gesture: Tên cử chỉ đang nhận diện
+        click_anchor_pos: Vị trí anchor khi bắt đầu pinch (cho visual feedback)
     """
 
     def __init__(self):
@@ -95,6 +97,7 @@ class GestureRecognizer:
         self._pinch_start_time = 0
         self._left_click_time = 0       # Thời điểm left click cuối
         self._is_pinching_prev = False   # Trạng thái pinch frame trước (hysteresis)
+        self.click_anchor_pos = None    # Vi tri on dinh khi bat dau pinch (cho feedback + click)
 
         # --- Double Click ---
         self._first_click_time = 0      # Thời điểm click lần 1 (chờ click lần 2)
@@ -112,15 +115,18 @@ class GestureRecognizer:
         self._swipe_start_x = 0        # Vị trí X khi bắt đầu track
         self._swipe_start_time = 0     # Thời điểm bắt đầu track
         self._swipe_cooldown_time = 0  # Cooldown sau khi swipe
+        self._swipe_frame_count = 0    # Đếm frame liên tục thỏa điều kiện swipe
 
         # --- Zoom (1 tay: index + middle guard) ---
         self._zoom_active = False       # Đang ở zoom mode?
         self._zoom_prev_distance = 0    # Khoảng cách thumb-index frame trước
         self._zoom_delta_acc = 0        # Accumulator delta (gom nhiều frame nhỏ)
         self._zoom_cooldown_time = 0    # Cooldown sau zoom trigger
+        self._zoom_frame_count = 0     # Đếm frame liên tục ở zoom mode
 
         # --- Post-action cooldown ---
         self._post_action_time = 0     # Thời điểm event cuối (click/swipe/etc.)
+        self._click_freeze_until = 0   # Thời điểm hết freeze cursor sau click
 
         # --- Velocity tracking ---
         self._prev_index_pos = None
@@ -147,7 +153,9 @@ class GestureRecognizer:
             "cursor_pos": None,
             "scroll_delta": None,
             "drag_pos": None,
-            "system_active": self.system_active
+            "system_active": self.system_active,
+            "click_anchor": None,
+            "click_freeze_until": 0,
         }
 
         # Kiểm tra dữ liệu đầu vào
@@ -222,6 +230,8 @@ class GestureRecognizer:
             result["gesture"] = pinch_result
             if pinch_result in (GESTURE_LEFT_CLICK, GESTURE_DOUBLE_CLICK):
                 result["cursor_pos"] = index_tip
+                result["click_anchor"] = self.click_anchor_pos
+                result["click_freeze_until"] = self._click_freeze_until
             elif pinch_result in (GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END):
                 result["drag_pos"] = index_tip
             self.current_gesture = pinch_result
@@ -231,19 +241,26 @@ class GestureRecognizer:
         # --- 2B: ZOOM IN / OUT ---
         # Guard gesture: index + middle up, ring + pinky down
         # Thumb-index distance delta → Zoom In (tăng) / Zoom Out (giảm)
-        zoom_result = self._check_zoom(fingers, thumb_index_dist, now)
+        # Truyền thumb_middle_dist để guard khi đang là right-click candidate
+        zoom_result = self._check_zoom(fingers, thumb_index_dist, thumb_middle_dist,
+                                        pinch_enter, now)
         if zoom_result is not None:
             result["gesture"] = zoom_result
             self.current_gesture = zoom_result
             self._update_prev_positions(landmark_list, hand_center)
             return result
 
-        # --- 2C: RIGHT CLICK (chỉ khi KHÔNG ở zoom mode) ---
+        # --- 2C: RIGHT CLICK (chi khi KHONG o zoom mode) ---
         right_click_result = self._check_right_click(
-            fingers, thumb_middle_dist, pinch_enter, pinch_exit, now
+            fingers, thumb_middle_dist, thumb_index_dist,
+            pinch_enter, pinch_exit, now
         )
         if right_click_result is not None:
             result["gesture"] = right_click_result
+            # Lưu anchor cho right click feedback
+            self.click_anchor_pos = middle_tip
+            result["click_anchor"] = self.click_anchor_pos
+            result["click_freeze_until"] = self._click_freeze_until
             self.current_gesture = right_click_result
             self._update_prev_positions(landmark_list, hand_center)
             return result
@@ -266,13 +283,17 @@ class GestureRecognizer:
             return result
 
         # --- 2E: MOVE CURSOR ---
-        move_result = self._check_move_cursor(fingers, index_tip)
-        if move_result is not None:
-            result["gesture"] = GESTURE_MOVE
-            result["cursor_pos"] = move_result
-            self.current_gesture = GESTURE_MOVE
-            self._update_prev_positions(landmark_list, hand_center)
-            return result
+        # Guard: không move khi đang ở zoom mode hoặc swipe tracking
+        # Để tránh cursor nhảy khi đang thao tác mode khác
+        if not self._zoom_active and not self._swipe_tracking:
+            move_result = self._check_move_cursor(fingers, index_tip)
+            if move_result is not None:
+                result["gesture"] = GESTURE_MOVE
+                result["cursor_pos"] = move_result
+                result["click_freeze_until"] = self._click_freeze_until
+                self.current_gesture = GESTURE_MOVE
+                self._update_prev_positions(landmark_list, hand_center)
+                return result
 
         # Không nhận diện được gesture nào
         self.current_gesture = GESTURE_NONE
@@ -379,6 +400,7 @@ class GestureRecognizer:
             if is_pinching and fingers[1] == 1:
                 self.pinch_state = PinchState.PREPARING
                 self._pinch_start_time = now
+                self.click_anchor_pos = index_tip  # Lưu vị trí ổn định cho feedback
             return None
 
         # --- State: PREPARING ---
@@ -390,6 +412,7 @@ class GestureRecognizer:
                 if cooldown_passed(self._left_click_time, cfg.CLICK_COOLDOWN, now):
                     self._left_click_time = now
                     self._post_action_time = now  # Post-action cooldown
+                    self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
 
                     # Double Click detection
                     if (self._waiting_double and
@@ -444,39 +467,65 @@ class GestureRecognizer:
     # ======================================================================
     # PRIVATE: RIGHT CLICK
     # ======================================================================
-    def _check_right_click(self, fingers, thumb_middle_dist,
+    def _check_right_click(self, fingers, thumb_middle_dist, thumb_index_dist,
                            enter_threshold, exit_threshold, now):
         """
-        Rule: Thumb + Middle pinch (chạm rồi thả).
-        Có hysteresis + edge detection.
+        Rule: Thumb + Middle pinch (cham roi tha).
+        Co hysteresis + edge detection.
+
+        Form (chi check khi ENTERING):
+          - middle == 1, ring == 0, pinky == 0
+          - thumb-middle dominance: thumb gan middle hon index
+          - KHONG bat buoc index == 0 (cho phep index flicker)
+        Khi da tracking: chi theo distance, bo qua finger flicker.
+        Guard: vo hieu khi dang o zoom mode.
         """
-        if fingers[2] == 0:
+        # GUARD: Zoom mode active -> skip
+        if self._zoom_active:
             self._right_click_was_pinching = False
             return None
 
-        if self._right_click_was_pinching:
-            is_pinching = thumb_middle_dist < exit_threshold
-        else:
-            is_pinching = thumb_middle_dist < enter_threshold
+        # --- Khi CHUA tracking: form check de bat dau ---
+        if not self._right_click_was_pinching:
+            # middle phai gio, ring+pinky phai cup
+            if not (fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0):
+                return None
+            # Thumb-middle dominance: thumb phai gan middle hon index
+            # Neu thumb gan index hon -> do la pinch/zoom, khong phai right click
+            if thumb_middle_dist >= thumb_index_dist:
+                return None
+            # Check pinch enter
+            if thumb_middle_dist < enter_threshold:
+                self._right_click_was_pinching = True
+            return None
 
-        # Edge detection: THẢ pinch
-        if self._right_click_was_pinching and not is_pinching:
+        # --- Dang tracking: chi theo distance, bo qua finger flicker ---
+        is_pinching = thumb_middle_dist < exit_threshold
+
+        # Edge detection: THA pinch -> trigger right click
+        if not is_pinching:
+            self._right_click_was_pinching = False
             if cooldown_passed(self._right_click_time, cfg.CLICK_COOLDOWN, now):
                 self._right_click_time = now
-                self._right_click_was_pinching = False
                 self._post_action_time = now
+                self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
                 return GESTURE_RIGHT_CLICK
+            return None
 
-        self._right_click_was_pinching = is_pinching
         return None
 
     # ======================================================================
     # PRIVATE: ZOOM IN / OUT
     # ======================================================================
-    def _check_zoom(self, fingers, thumb_index_dist, now):
+    def _check_zoom(self, fingers, thumb_index_dist, thumb_middle_dist,
+                    pinch_enter, now):
         """
         Rule: Zoom mode = index + middle giơ, ring + pinky cụp.
         Thumb tự do — khoảng cách thumb-index thay đổi xác định hướng zoom.
+
+        Guards:
+          - Nếu thumb đang gần middle (right-click candidate) → skip zoom
+          - Phải đủ ZOOM_STABLE_FRAMES liên tục mới activate
 
         Logic:
           - Vào zoom mode → ghi prev_distance, chờ frame tiếp
@@ -493,15 +542,25 @@ class GestureRecognizer:
             fingers[4] == 0
         )
 
+        # GUARD: Nếu thumb đang gần middle → right-click candidate, không phải zoom
+        if is_zoom_mode and thumb_middle_dist < pinch_enter * 1.5:
+            is_zoom_mode = False
+
         if not is_zoom_mode:
             # Ra khỏi zoom mode → reset
             if self._zoom_active:
                 self._zoom_active = False
                 self._zoom_prev_distance = 0
                 self._zoom_delta_acc = 0
+            self._zoom_frame_count = 0
             return None
 
-        # Vào zoom mode lần đầu
+        # Đếm frame liên tục ở zoom mode — phải đủ ZOOM_STABLE_FRAMES mới bắt đầu
+        self._zoom_frame_count += 1
+        if self._zoom_frame_count < cfg.ZOOM_STABLE_FRAMES:
+            return None
+
+        # Vào zoom mode (sau khi đủ frame ổn định)
         if not self._zoom_active:
             self._zoom_active = True
             self._zoom_prev_distance = thumb_index_dist
@@ -537,24 +596,27 @@ class GestureRecognizer:
     # ======================================================================
     def _check_swipe(self, fingers, hand_center, now):
         """
-        Swipe detection: Mở bàn tay (≥4 ngón) + vuốt ngang nhanh.
+        Swipe detection: thumb down + 4 ngon chinh up + vuot ngang nhanh.
 
-        Logic:
-        1. Khi tay mở (≥4 ngón) và chưa tracking → bắt đầu track vị trí X
-        2. Mỗi frame, tính delta_x = current_x - start_x
-        3. Nếu |delta_x| >= SWIPE_THRESHOLD_X trong SWIPE_TIME_WINDOW → trigger
-        4. Trigger 1 lần, set cooldown, reset tracking
-
-        Tránh nhầm:
-        - Toggle cần giữ YÊN 3s → swipe cần CHUYỂN ĐỘNG nhanh < 0.5s
-        - Move cursor cần 1 ngón → swipe cần ≥4 ngón
-        - Cooldown 0.8s chống trigger liên tục
+        Form:
+          ENTERING: fingers = [0, 1, 1, 1, 1] (thumb down, 4 ngon up)
+          TRACKING: chi can index+middle+ring+pinky up (bo qua thumb flicker)
+          Toggle = 5 ngon -> khong xung dot.
         """
-        finger_count = sum(fingers)
+        # 4 ngon chinh phai gio (index, middle, ring, pinky)
+        four_fingers_up = (fingers[1] == 1 and fingers[2] == 1 and
+                           fingers[3] == 1 and fingers[4] == 1)
 
-        # Điều kiện: tay mở ≥ SWIPE_MIN_FINGERS ngón
-        if finger_count < cfg.SWIPE_MIN_FINGERS or hand_center is None:
+        if hand_center is None or not four_fingers_up:
+            # 4 ngon chinh khong du -> reset hoan toan
             self._swipe_tracking = False
+            self._swipe_frame_count = 0
+            return None
+
+        # Khi chua tracking: yeu cau thumb == 0 (form chat)
+        # Khi da tracking: cho phep thumb flicker (chi can 4 ngon chinh)
+        if not self._swipe_tracking and fingers[0] != 0:
+            self._swipe_frame_count = 0
             return None
 
         # Cooldown
@@ -564,7 +626,12 @@ class GestureRecognizer:
         current_x = hand_center[0]
 
         if not self._swipe_tracking:
-            # Bắt đầu track — dùng prev position nếu có (bắt đọ delta đầy đủ)
+            # Đếm frame liên tục thỏa điều kiện — phải đủ SWIPE_STABLE_FRAMES
+            self._swipe_frame_count += 1
+            if self._swipe_frame_count < cfg.SWIPE_STABLE_FRAMES:
+                return None
+
+            # Bắt đầu track — dùng prev position nếu có
             self._swipe_tracking = True
             if self._prev_hand_center is not None:
                 self._swipe_start_x = self._prev_hand_center[0]
@@ -576,9 +643,10 @@ class GestureRecognizer:
         # Đang tracking → kiểm tra điều kiện
         elapsed = now - self._swipe_start_time
 
-        # Timeout: tay mở nhưng không vuốt đủ nhanh → tắt tracking, nhường cho toggle
+        # Timeout: tay mo nhung khong vuot du nhanh → tat tracking, nhuong cho toggle
         if elapsed > cfg.SWIPE_TIME_WINDOW:
             self._swipe_tracking = False
+            self._swipe_frame_count = 0  # Reset de khong bat lai ngay
             return None
 
         # Tính delta X
@@ -640,10 +708,14 @@ class GestureRecognizer:
         self._scroll_prev_y = None
         self._right_click_was_pinching = False
         self._swipe_tracking = False
+        self._swipe_frame_count = 0
         self._waiting_double = False
         self._zoom_active = False
         self._zoom_prev_distance = 0
         self._zoom_delta_acc = 0
+        self._zoom_frame_count = 0
+        self.click_anchor_pos = None
+        self._click_freeze_until = 0
         # Lưu ý: KHÔNG reset _five_fingers_start và _toggle_active ở đây
         # Toggle phải tự quản lý state để hoạt động cả khi system OFF
         self._prev_index_pos = None
@@ -666,7 +738,7 @@ class GestureRecognizer:
         return min(elapsed / cfg.SYSTEM_TOGGLE_HOLD_TIME, 1.0)
 
     def get_state_info(self):
-        """Thông tin debug."""
+        """Thông tin state cho UI và debug."""
         return {
             "system_active": self.system_active,
             "current_gesture": self.current_gesture,
@@ -674,6 +746,8 @@ class GestureRecognizer:
             "toggle_progress": self.get_toggle_progress(),
             "waiting_double": self._waiting_double,
             "swipe_tracking": self._swipe_tracking,
+            "zoom_active": self._zoom_active,
+            "click_freeze_until": self._click_freeze_until,
         }
 
     # ======================================================================

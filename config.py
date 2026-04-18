@@ -41,17 +41,17 @@ PINCH_EXIT_MULTIPLIER = 1.3         # Hysteresis: exit = enter * 1.3 (tránh fli
 
 # --- Double Click ---
 DOUBLE_CLICK_TIME_WINDOW = 0.5      # Thời gian tối đa giữa 2 left click để thành double click (giây)
-DOUBLE_CLICK_COOLDOWN = 0.5         # Cooldown sau double click (giây)
 
 # --- Scroll ---
 SCROLL_SPEED = 12                   # Tốc độ cuộn (đơn vị scroll/frame)
 SCROLL_SENSITIVITY = 10             # Ngưỡng di chuyển tối thiểu theo trục Y (pixels)
 
-# --- Swipe ---
+# --- Swipe (trình chiếu: next/prev slide) ---
 SWIPE_MIN_FINGERS = 4               # Số ngón tối thiểu phải giơ để nhận swipe
 SWIPE_THRESHOLD_X = 80              # Di chuyển ngang tối thiểu để trigger swipe (pixels)
 SWIPE_TIME_WINDOW = 0.5             # Thời gian tối đa cho 1 lần swipe (giây)
 SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
+SWIPE_STABLE_FRAMES = 2             # Số frame liên tục thỏa điều kiện mới bắt đầu tracking
 
 # --- System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
@@ -62,11 +62,19 @@ OPEN_PALM_GRACE_PERIOD = 0.4        # Grace period: 5 ngón phải giữ yên 0.
 
 # --- Stability (Ổn định gesture) ---
 POST_ACTION_COOLDOWN = 0.15         # Neutral gap sau event gestures (click, swipe) (giây)
+CLICK_FREEZE_TIME = 0.10            # Freeze cursor sau click/right click (giây)
+                                    # Chống rung: cursor không move trong khoảng này
+MOVE_DEADZONE = 3                   # Deadzone di chuyển chuột (pixels trên màn hình)
+                                    # Nếu target gần current hơn deadzone → không move
+                                    # Giảm rung khi tay đứng yên
 
 # --- Zoom (1 tay: index + middle guard, thumb-index distance delta) ---
-ZOOM_DELTA_THRESHOLD = 15           # Delta tích lũy tối thiểu để trigger zoom (pixels)
+ZOOM_DELTA_THRESHOLD = 20           # Delta tích lũy tối thiểu để trigger zoom (pixels)
                                     # Accumulator gom nhiều frame nhỏ → 1 trigger ổn định
+                                    # Tăng từ 15 → 20 để bớt trigger nhạy
 ZOOM_COOLDOWN = 0.25                # Cooldown giữa các lần zoom (giây)
+ZOOM_STABLE_FRAMES = 4              # Số frame liên tục ở zoom mode mới bắt đầu tracking delta
+                                    # Tăng từ 3 → 4 để chắc mode hơn
 
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)

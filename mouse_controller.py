@@ -16,7 +16,8 @@ Actions:
   - right_click(): Click chuột phải
   - drag_start() / drag_move() / drag_end(): Kéo-thả
   - scroll(): Cuộn trang
-  - swipe_action(): Hành động swipe (demo: chỉ print)
+  - swipe_action(): Chuyển slide trình chiếu (Right/Left arrow)
+  - zoom_in() / zoom_out(): Zoom (Ctrl+= / Ctrl+-)
 """
 
 import pyautogui
@@ -44,6 +45,7 @@ class MouseController:
         self.prev_x = self.screen_w // 2
         self.prev_y = self.screen_h // 2
         self.is_dragging = False
+        self._click_freeze_until = 0   # Freeze cursor until this timestamp
 
     def process_gesture(self, gesture_result):
         """
@@ -64,19 +66,20 @@ class MouseController:
         # --- Move Cursor ---
         if gesture == GESTURE_MOVE:
             if gesture_result["cursor_pos"]:
-                self.move_cursor(gesture_result["cursor_pos"])
+                self.move_cursor(gesture_result["cursor_pos"],
+                                 gesture_result.get("click_freeze_until", 0))
 
-        # --- Left Click (không move cursor — vị trí đã đúng từ frame MOVE trước) ---
+        # --- Left Click ---
         elif gesture == GESTURE_LEFT_CLICK:
-            self.left_click()
+            self.left_click(gesture_result.get("click_anchor"))
 
         # --- Double Click ---
         elif gesture == GESTURE_DOUBLE_CLICK:
-            self.double_click()
+            self.double_click(gesture_result.get("click_anchor"))
 
         # --- Right Click ---
         elif gesture == GESTURE_RIGHT_CLICK:
-            self.right_click()
+            self.right_click(gesture_result.get("click_anchor"))
 
         # --- Drag Start ---
         elif gesture == GESTURE_DRAG_START:
@@ -108,8 +111,16 @@ class MouseController:
         elif gesture == GESTURE_ZOOM_OUT:
             self.zoom_out()
 
-    def move_cursor(self, camera_pos):
-        """Di chuyển chuột với smoothing + ROI mapping."""
+    def move_cursor(self, camera_pos, click_freeze_until=0):
+        """Di chuyển chuột với smoothing + ROI mapping + deadzone + freeze."""
+        import time as _time
+
+        # Freeze: không move nếu đang trong khoảng freeze sau click
+        now = _time.time()
+        freeze_ts = click_freeze_until or self._click_freeze_until
+        if now < freeze_ts:
+            return
+
         cam_x, cam_y = camera_pos
 
         # Clamp vào ROI
@@ -133,20 +144,54 @@ class MouseController:
         smooth_x = clamp(int(smooth_x), 0, self.screen_w - 1)
         smooth_y = clamp(int(smooth_y), 0, self.screen_h - 1)
 
+        # Deadzone: không move nếu target quá gần current (đứng yên → giảm rung)
+        dx = abs(smooth_x - self.prev_x)
+        dy = abs(smooth_y - self.prev_y)
+        if dx <= cfg.MOVE_DEADZONE and dy <= cfg.MOVE_DEADZONE:
+            return
+
         pyautogui.moveTo(smooth_x, smooth_y)
         self.prev_x = smooth_x
         self.prev_y = smooth_y
 
-    def left_click(self):
-        """Click chuột trái."""
+    def _move_to_anchor(self, anchor_cam_pos):
+        """
+        Di chuyển cursor tới vị trí anchor (camera coords) trước khi click.
+        Bỏ qua smoothing để click chính xác tại đúng vị trí anchor.
+        """
+        if not anchor_cam_pos:
+            return
+        cam_x, cam_y = anchor_cam_pos
+        cam_x = clamp(cam_x, cfg.ROI_X_MIN, cfg.ROI_X_MAX)
+        cam_y = clamp(cam_y, cfg.ROI_Y_MIN, cfg.ROI_Y_MAX)
+        screen_x = int(map_range(cam_x, cfg.ROI_X_MIN, cfg.ROI_X_MAX,
+                                 0, self.screen_w))
+        screen_y = int(map_range(cam_y, cfg.ROI_Y_MIN, cfg.ROI_Y_MAX,
+                                 0, self.screen_h))
+        screen_x = clamp(screen_x, 0, self.screen_w - 1)
+        screen_y = clamp(screen_y, 0, self.screen_h - 1)
+        pyautogui.moveTo(screen_x, screen_y)
+        self.prev_x = screen_x
+        self.prev_y = screen_y
+        import time as _time
+        self._click_freeze_until = _time.time() + cfg.CLICK_FREEZE_TIME
+
+    def left_click(self, anchor_cam_pos=None):
+        """Click chuot trai. Move to anchor truoc neu co."""
+        if anchor_cam_pos:
+            self._move_to_anchor(anchor_cam_pos)
         pyautogui.click()
 
-    def double_click(self):
-        """Double click chuột trái."""
+    def double_click(self, anchor_cam_pos=None):
+        """Double click chuot trai. Move to anchor truoc neu co."""
+        if anchor_cam_pos:
+            self._move_to_anchor(anchor_cam_pos)
         pyautogui.doubleClick()
 
-    def right_click(self):
-        """Click chuột phải."""
+    def right_click(self, anchor_cam_pos=None):
+        """Click chuot phai. Move to anchor truoc neu co."""
+        if anchor_cam_pos:
+            self._move_to_anchor(anchor_cam_pos)
         pyautogui.rightClick()
 
     def drag_start(self):
@@ -172,16 +217,23 @@ class MouseController:
 
     def swipe_action(self, gesture_name):
         """
-        Hành động swipe:
-          Swipe Left  → Alt+Left  (Back trên trình duyệt / Explorer)
-          Swipe Right → Alt+Right (Forward trên trình duyệt / Explorer)
+        Hành động swipe — điều khiển trình chiếu.
+
+        Mapping:
+          Vuốt trái  = Nội dung kế tiếp  → press('right')   (next slide)
+          Vuốt phải = Nội dung trước    → press('left')    (prev slide)
+
+        Tương thích: PowerPoint, Google Slides, PDF viewer, image viewer.
+        Fallback nếu cần: PageDown / PageUp (có thể đổi tại đây).
         """
         if gesture_name == "Swipe Left":
-            pyautogui.hotkey('alt', 'left')
-            print("[SWIPE] ← Back")
+            # Vuốt trái = sang nội dung kế tiếp (next)
+            pyautogui.press('right')
+            # Fallback: pyautogui.press('pagedown')
         elif gesture_name == "Swipe Right":
-            pyautogui.hotkey('alt', 'right')
-            print("[SWIPE] → Forward")
+            # Vuốt phải = quay lại nội dung trước (prev)
+            pyautogui.press('left')
+            # Fallback: pyautogui.press('pageup')
 
     def zoom_in(self):
         """

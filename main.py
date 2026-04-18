@@ -8,18 +8,19 @@ Pipeline mỗi frame:
   2. HandDetector: detect tay → landmarks, fingers, palm_size
   3. GestureRecognizer: nhận diện gesture → result dict
   4. MouseController: thực thi action
-  5. Vẽ demo overlay: gesture banner, feedback, ROI, HUD
+  5. Vẽ demo overlay: gesture banner, mode indicator, feedback, ROI, HUD
   6. Hiển thị → lặp lại
 
 Demo UI:
   - Gesture Banner: text lớn ở trung tâm-trên, màu theo gesture
-  - "Waiting for gesture..." khi không có action
+  - Mode Indicator: [ZOOM MODE] / [SWIPE TRACKING] khi đang trong mode
   - Progress bar cho system toggle
-  - Visual feedback: click flash, drag line, scroll arrows, swipe arrows
+  - Visual feedback: click flash (anchor), drag line, scroll/swipe arrows, zoom line
 
 Điều khiển:
   - Giơ 5 ngón 3 giây: Bật/Tắt hệ thống
   - Nhấn 'q': Thoát
+  - Nhấn 's': Toggle điều khiển ON/OFF nhanh
 """
 
 import cv2
@@ -186,8 +187,8 @@ def draw_toggle_progress(frame, progress):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, cfg.COLOR_WHITE, 1)
 
 
-def draw_gesture_feedback(frame, gesture_name, landmark_list):
-    """Vẽ visual feedback trên tay: click flash, drag line, scroll/swipe arrows."""
+def draw_gesture_feedback(frame, gesture_name, landmark_list, recognizer=None):
+    """Vẽ visual feedback trên tay: click flash (anchor), drag line, scroll/swipe arrows, zoom line."""
     if not landmark_list or len(landmark_list) < 21:
         return
 
@@ -195,16 +196,20 @@ def draw_gesture_feedback(frame, gesture_name, landmark_list):
     index_tip = (landmark_list[cfg.INDEX_TIP][1], landmark_list[cfg.INDEX_TIP][2])
     middle_tip = (landmark_list[cfg.MIDDLE_TIP][1], landmark_list[cfg.MIDDLE_TIP][2])
 
-    # --- Left Click: flash circle ---
+    # --- Left Click: flash circle tại anchor (vị trí ổn định từ lúc bắt đầu pinch) ---
     if gesture_name == GESTURE_LEFT_CLICK:
-        cv2.circle(frame, index_tip, 20, cfg.COLOR_CLICK, 3)
-        cv2.circle(frame, index_tip, 30, cfg.COLOR_CLICK, 1)
+        anchor = (recognizer.click_anchor_pos if recognizer and recognizer.click_anchor_pos
+                  else index_tip)
+        cv2.circle(frame, anchor, 20, cfg.COLOR_CLICK, 3)
+        cv2.circle(frame, anchor, 30, cfg.COLOR_CLICK, 1)
 
-    # --- Double Click: double flash ---
+    # --- Double Click: double flash tại anchor ---
     elif gesture_name == GESTURE_DOUBLE_CLICK:
-        cv2.circle(frame, index_tip, 20, cfg.COLOR_DOUBLE_CLICK, 3)
-        cv2.circle(frame, index_tip, 30, cfg.COLOR_DOUBLE_CLICK, 2)
-        cv2.circle(frame, index_tip, 40, cfg.COLOR_DOUBLE_CLICK, 1)
+        anchor = (recognizer.click_anchor_pos if recognizer and recognizer.click_anchor_pos
+                  else index_tip)
+        cv2.circle(frame, anchor, 20, cfg.COLOR_DOUBLE_CLICK, 3)
+        cv2.circle(frame, anchor, 30, cfg.COLOR_DOUBLE_CLICK, 2)
+        cv2.circle(frame, anchor, 40, cfg.COLOR_DOUBLE_CLICK, 1)
 
     # --- Right Click: flash tại ngón giữa ---
     elif gesture_name == GESTURE_RIGHT_CLICK:
@@ -267,10 +272,55 @@ EVENT_GESTURES = {
 }
 
 
+def draw_mode_indicator(frame, recognizer):
+    """
+    Vẽ mode indicator dưới banner: [ZOOM MODE], [SWIPE TRACKING].
+    Cho người xem biết hệ thống đang ở mode nào trước khi trigger.
+    """
+    state = recognizer.get_state_info()
+    labels = []
+    if state.get("zoom_active"):
+        labels.append("ZOOM MODE")
+    if state.get("swipe_tracking"):
+        labels.append("SWIPE TRACKING")
+    if not labels:
+        return
+
+    y = 85  # Dưới banner chính
+    for label in labels:
+        text = f"[ {label} ]"
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        tx = (cfg.CAMERA_WIDTH - tw) // 2
+        # Nền bán trong suốt
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (tx - 8, y - th - 4), (tx + tw + 8, y + 6),
+                      (40, 40, 40), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        # Text
+        color = cfg.COLOR_ZOOM if "ZOOM" in label else cfg.COLOR_SWIPE
+        cv2.putText(frame, text, (tx, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
+        y += 30
+
+
+def draw_hotkey_help(frame, system_active):
+    """Hiển thị phím tắt ở góc dưới-phải."""
+    lines = [
+        "Q: Quit",
+        f"S: {'Disable' if system_active else 'Enable'} control",
+    ]
+    y = cfg.CAMERA_HEIGHT - 15
+    for line in reversed(lines):
+        (tw, _), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        cv2.putText(frame, line, (cfg.CAMERA_WIDTH - tw - 10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, cfg.COLOR_WHITE, 1)
+        y -= 18
+
+
 def main():
     """Hàm chính — khởi tạo modules, chạy vòng lặp real-time."""
     print("=" * 50)
-    print("  AI Mouse Controller - Khởi động...")
+    print("  AI Mouse Controller - Starting...")
     print("=" * 50)
 
     # Webcam
@@ -279,7 +329,7 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_HEIGHT)
 
     if not cap.isOpened():
-        print("[ERROR] Không thể mở webcam!")
+        print("[ERROR] Cannot open webcam!")
         return
 
     # Modules
@@ -291,17 +341,17 @@ def main():
     prev_time = 0
     fps = 0
 
-    # Banner linger: giữ event gesture trên banner thêm vài frame
+    # Banner linger
     linger_gesture = None
     linger_counter = 0
 
     screen_w, screen_h = controller.get_screen_size()
     print(f"  Webcam: {cfg.CAMERA_WIDTH}x{cfg.CAMERA_HEIGHT}")
-    print(f"  Màn hình: {screen_w}x{screen_h}")
+    print(f"  Screen: {screen_w}x{screen_h}")
     print(f"  Smoothing: {cfg.SMOOTHING_FACTOR}")
-    print(f"  System: {'ON' if recognizer.system_active else 'OFF (giơ 5 ngón 3s để bật)'}")
+    print(f"  System: {'ON' if recognizer.system_active else 'OFF (hold 5 fingers 3s to enable)'}")
     print("=" * 50)
-    print("  Nhấn 'q' để thoát")
+    print("  Press 'q' to quit | 's' to toggle control")
     print("=" * 50)
 
     try:
@@ -309,7 +359,7 @@ def main():
             # --- Đọc frame ---
             ret, frame = cap.read()
             if not ret:
-                print("[ERROR] Không đọc được frame!")
+                print("[ERROR] Cannot read frame!")
                 break
 
             frame = cv2.flip(frame, 1)
@@ -330,16 +380,20 @@ def main():
                     landmark_list, fingers, palm_size, hand_center
                 )
 
-                # Thực thi action (chỉ khi system ON)
+                # Thuc thi action (chi khi system ON)
                 if gesture_result["system_active"]:
                     controller.process_gesture(gesture_result)
+                else:
+                    # Safety: release drag khi system vua OFF
+                    if controller.is_dragging:
+                        controller.drag_end()
 
                 # Vẽ custom landmarks
                 detector.draw_custom_landmarks(frame)
 
                 # Visual feedback cho gesture trên tay
                 draw_gesture_feedback(
-                    frame, gesture_result["gesture"], landmark_list
+                    frame, gesture_result["gesture"], landmark_list, recognizer
                 )
 
                 # Bounding box (xanh = ON, đỏ = OFF)
@@ -392,17 +446,30 @@ def main():
             # --- HUD (FPS + Gesture + Status ở góc trái) ---
             detector.draw_info(frame, fps, current_gesture, system_active)
 
+            # --- Mode indicator ---
+            draw_mode_indicator(frame, recognizer)
+
+            # --- Hotkey help ---
+            draw_hotkey_help(frame, system_active)
+
             # --- Hiển thị ---
             cv2.imshow(cfg.WINDOW_NAME, frame)
 
-            # --- Thoát ---
+            # --- Phím điều khiển ---
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == ord('Q'):
-                print("\n[INFO] Thoát chương trình...")
+                print("\n[INFO] Exiting...")
                 break
+            elif key == ord('s') or key == ord('S'):
+                recognizer.system_active = not recognizer.system_active
+                state = "ON" if recognizer.system_active else "OFF"
+                print(f"[KEY] System {state}")
+                # Safety: release drag when system OFF
+                if not recognizer.system_active and controller.is_dragging:
+                    controller.drag_end()
 
     except KeyboardInterrupt:
-        print("\n[INFO] Ngắt bằng Ctrl+C...")
+        print("\n[INFO] Interrupted (Ctrl+C)")
 
     finally:
         if controller.is_dragging:
@@ -410,7 +477,7 @@ def main():
         cap.release()
         detector.release()
         cv2.destroyAllWindows()
-        print("[INFO] Đã giải phóng tài nguyên. Tạm biệt!")
+        print("[INFO] Resources released. Goodbye!")
 
 
 if __name__ == "__main__":
