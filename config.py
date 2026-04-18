@@ -21,12 +21,30 @@ ROI_X_MAX = CAMERA_WIDTH - ROI_PADDING_X
 ROI_Y_MAX = CAMERA_HEIGHT - ROI_PADDING_Y
 
 # ==============================================================================
-# 2. CÀI ĐẶT MEDIAPIPE HANDS
+# 2. CAI DAT MEDIAPIPE HANDS
 # ==============================================================================
-MAX_NUM_HANDS = 1                   # Số lượng bàn tay tối đa detect
-MIN_DETECTION_CONFIDENCE = 0.7      # Ngưỡng tin cậy khi phát hiện bàn tay
-MIN_TRACKING_CONFIDENCE = 0.7       # Ngưỡng tin cậy khi theo dõi bàn tay
-MODEL_COMPLEXITY = 1                # Độ phức tạp model (0 = nhẹ, 1 = đầy đủ)
+MAX_NUM_HANDS = 2                   # So luong ban tay toi da detect
+MIN_DETECTION_CONFIDENCE = 0.7      # Nguong tin cay khi phat hien ban tay
+MIN_TRACKING_CONFIDENCE = 0.7       # Nguong tin cay khi theo doi ban tay
+MODEL_COMPLEXITY = 1                # Do phuc tap model (0 = nhe, 1 = day du)
+
+# --- Che do 2 tay phan vai ---
+ENABLE_TWO_HAND_MODE = True         # Bat che do 2 tay (True = 2 tay, False = fallback 1 tay)
+DOMINANT_HAND = "Right"             # Tay thuan cua nguoi dung (Right/Left)
+                                    # Tay thuan = Primary (dieu khien cursor)
+                                    # Tay con lai = Secondary (lenh he thong)
+# Vai tro tay (tu dong tinh tu DOMINANT_HAND)
+# MediaPipe tra ve handedness theo goc nhin CAMERA (mirror):
+#   - Tay phai nguoi dung -> MediaPipe noi "Left" (vi mirror)
+#   - Tay trai nguoi dung -> MediaPipe noi "Right" (vi mirror)
+# PRIMARY = tay thuan (cursor), SECONDARY = tay phu (system)
+PRIMARY_HAND_LABEL = "Left" if DOMINANT_HAND == "Right" else "Right"  # MediaPipe label (mirror)
+SECONDARY_HAND_LABEL = "Right" if DOMINANT_HAND == "Right" else "Left"  # MediaPipe label (mirror)
+ALLOW_ONE_HAND_FALLBACK = True      # Cho phep fallback 1 tay khi chi detect 1 tay
+
+# --- Mau label 2 tay ---
+COLOR_PRIMARY_HAND = (0, 255, 0)    # Xanh la - Primary hand bbox
+COLOR_SECONDARY_HAND = (255, 165, 0) # Cam - Secondary hand bbox
 
 # ==============================================================================
 # 3. NGƯỠNG CỬ CHỈ (GESTURE THRESHOLDS)

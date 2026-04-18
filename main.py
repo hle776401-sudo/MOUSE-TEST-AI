@@ -25,10 +25,11 @@ Demo UI:
 
 import cv2
 import time
+import traceback
 import config as cfg
 from hand_tracking import HandDetector
 from gesture_recognition import (
-    GestureRecognizer,
+    GestureRecognizer, GestureCoordinator,
     GESTURE_NONE, GESTURE_MOVE,
     GESTURE_LEFT_CLICK, GESTURE_DOUBLE_CLICK, GESTURE_RIGHT_CLICK,
     GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END,
@@ -334,8 +335,12 @@ def main():
 
     # Modules
     detector = HandDetector()
-    recognizer = GestureRecognizer()
+    coordinator = GestureCoordinator()          # 2-hand mode
+    fallback_recognizer = GestureRecognizer()   # 1-hand fallback
     controller = MouseController()
+
+    # Track which mode is active
+    is_two_hand_mode = False
 
     # FPS
     prev_time = 0
@@ -349,7 +354,9 @@ def main():
     print(f"  Webcam: {cfg.CAMERA_WIDTH}x{cfg.CAMERA_HEIGHT}")
     print(f"  Screen: {screen_w}x{screen_h}")
     print(f"  Smoothing: {cfg.SMOOTHING_FACTOR}")
-    print(f"  System: {'ON' if recognizer.system_active else 'OFF (hold 5 fingers 3s to enable)'}")
+    print(f"  Two-Hand Mode: {cfg.ENABLE_TWO_HAND_MODE}")
+    print(f"  Dominant Hand: {cfg.DOMINANT_HAND}")
+    print(f"  System: OFF (hold 5 fingers on secondary hand 3s to enable)")
     print("=" * 50)
     print("  Press 'q' to quit | 's' to toggle control")
     print("=" * 50)
@@ -364,66 +371,194 @@ def main():
 
             frame = cv2.flip(frame, 1)
 
-            # --- Detect bàn tay ---
+            # --- Detect ban tay ---
             frame = detector.find_hands(frame, draw=False)
-            landmark_list, bbox = detector.find_position(frame)
 
-            # --- Xử lý gesture ---
-            gesture_result = None
+            # --- 2 TAY: lay data cho tat ca tay ---
+            all_hands = detector.get_all_hands_data(frame)
 
-            if detector.is_hand_detected() and landmark_list:
-                fingers = detector.fingers_up()
-                palm_size = detector.get_palm_size()
-                hand_center = detector.get_hand_center()
+            # Gan vai tro primary / secondary
+            primary_hand = None
+            secondary_hand = None
 
-                gesture_result = recognizer.recognize(
-                    landmark_list, fingers, palm_size, hand_center
-                )
+            if cfg.ENABLE_TWO_HAND_MODE and len(all_hands) >= 2:
+                # Co 2 tay -> gan theo handedness config
+                for hd in all_hands:
+                    if hd["handedness"] == cfg.PRIMARY_HAND_LABEL:
+                        primary_hand = hd
+                    elif hd["handedness"] == cfg.SECONDARY_HAND_LABEL:
+                        secondary_hand = hd
+                # Fallback neu MediaPipe tra ve 2 tay cung label
+                if primary_hand is None and secondary_hand is None:
+                    primary_hand = all_hands[0]
+                    secondary_hand = all_hands[1]
+                elif primary_hand is None:
+                    primary_hand = [h for h in all_hands if h != secondary_hand][0]
+                elif secondary_hand is None:
+                    secondary_hand = [h for h in all_hands if h != primary_hand][0]
 
-                # Thuc thi action (chi khi system ON)
-                if gesture_result["system_active"]:
-                    controller.process_gesture(gesture_result)
+            elif len(all_hands) == 1:
+                # Chi 1 tay -> fallback
+                hand = all_hands[0]
+                if cfg.ALLOW_ONE_HAND_FALLBACK:
+                    # 1 tay = primary (nhu cu)
+                    primary_hand = hand
                 else:
-                    # Safety: release drag khi system vua OFF
+                    # Gan theo dung handedness
+                    if hand["handedness"] == cfg.PRIMARY_HAND_LABEL:
+                        primary_hand = hand
+                    elif hand["handedness"] == cfg.SECONDARY_HAND_LABEL:
+                        secondary_hand = hand
+
+            # --- Xu ly gesture ---
+            gesture_result = None
+            current_gesture = GESTURE_NONE
+            system_active = False
+
+            if cfg.ENABLE_TWO_HAND_MODE and len(all_hands) >= 2 and primary_hand and secondary_hand:
+                # ====== 2-HAND MODE ======
+                is_two_hand_mode = True
+
+                coord_result = coordinator.process(primary_hand, secondary_hand)
+                primary_result = coord_result["primary_result"]
+                secondary_result = coord_result["secondary_result"]
+                system_active = coord_result["system_active"]
+
+                # Thuc thi primary action (move, click, drag, scroll)
+                if system_active:
+                    controller.process_gesture(primary_result)
+                else:
                     if controller.is_dragging:
                         controller.drag_end()
 
-                # Vẽ custom landmarks
-                detector.draw_custom_landmarks(frame)
+                # Lay gesture name cua tung tay
+                pri_g = primary_result.get("gesture", GESTURE_NONE)
+                sec_g = secondary_result.get("gesture", GESTURE_NONE)
 
-                # Visual feedback cho gesture trên tay
-                draw_gesture_feedback(
-                    frame, gesture_result["gesture"], landmark_list, recognizer
+                # Thuc thi secondary action (swipe, zoom)
+                # Chi dispatch cac gesture co action that, khong dispatch toggle/open_palm
+                if system_active and sec_g in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+                                                GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                    sec_action = {
+                        "gesture": sec_g,
+                        "cursor_pos": None,
+                        "scroll_delta": None,
+                        "drag_pos": None,
+                        "click_anchor": None,
+                        "click_freeze_until": 0,
+                    }
+                    controller.process_gesture(sec_action)
+
+                # Event gestures uu tien hien thi
+                if sec_g in EVENT_GESTURES or sec_g in (GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT,
+                                                         GESTURE_SYSTEM_TOGGLE, GESTURE_OPEN_PALM):
+                    current_gesture = sec_g
+                elif pri_g != GESTURE_NONE:
+                    current_gesture = pri_g
+                else:
+                    current_gesture = sec_g if sec_g != GESTURE_NONE else pri_g
+
+                # Tao gesture_result compatible cho UI
+                gesture_result = {
+                    "gesture": current_gesture,
+                    "cursor_pos": primary_result.get("cursor_pos"),
+                    "scroll_delta": primary_result.get("scroll_delta"),
+                    "drag_pos": primary_result.get("drag_pos"),
+                    "system_active": system_active,
+                    "click_anchor": primary_result.get("click_anchor"),
+                    "click_freeze_until": primary_result.get("click_freeze_until", 0),
+                }
+
+                # Ve landmarks cho primary hand
+                if primary_hand:
+                    detector.landmark_list = primary_hand["landmarks"]
+                    detector.draw_custom_landmarks(frame)
+                    draw_gesture_feedback(
+                        frame, pri_g,
+                        primary_hand["landmarks"],
+                        coordinator.primary_recognizer
+                    )
+
+            elif len(all_hands) >= 1:
+                # ====== FALLBACK 1-HAND MODE ======
+                is_two_hand_mode = False
+                active_hand = primary_hand if primary_hand else (secondary_hand if secondary_hand else all_hands[0])
+
+                detector.landmark_list = active_hand["landmarks"]
+
+                gesture_result = fallback_recognizer.recognize(
+                    active_hand["landmarks"],
+                    active_hand["fingers"],
+                    active_hand["palm_size"],
+                    active_hand["center"]
                 )
 
-                # Bounding box (xanh = ON, đỏ = OFF)
-                if bbox:
-                    x1, y1, x2, y2 = bbox
-                    bb_color = cfg.COLOR_SUCCESS if gesture_result["system_active"] else cfg.COLOR_DANGER
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), bb_color, 2)
+                current_gesture = gesture_result["gesture"]
+                system_active = gesture_result["system_active"]
+
+                if system_active:
+                    controller.process_gesture(gesture_result)
+                else:
+                    if controller.is_dragging:
+                        controller.drag_end()
+
+                detector.draw_custom_landmarks(frame)
+                draw_gesture_feedback(
+                    frame, current_gesture,
+                    active_hand["landmarks"], fallback_recognizer
+                )
 
             else:
-                # Mất tracking → reset states
-                gesture_result = recognizer.recognize([], [], 0, None)
-                # An toàn: thả chuột nếu đang drag
+                # ====== KHONG CO TAY ======
+                is_two_hand_mode = False
+                gesture_result = fallback_recognizer.recognize([], [], 0, None)
+                current_gesture = GESTURE_NONE
+                system_active = fallback_recognizer.system_active
                 if controller.is_dragging:
                     controller.drag_end()
 
-            # --- Cập nhật linger ---
-            current_gesture = gesture_result["gesture"] if gesture_result else GESTURE_NONE
-            system_active = gesture_result["system_active"] if gesture_result else False
+            # --- Ve bbox + label cho tung tay ---
+            if primary_hand and primary_hand["bbox"]:
+                pri_label = "PRIMARY"
+                if is_two_hand_mode:
+                    pri_g_name = coordinator.primary_recognizer.current_gesture
+                    if pri_g_name != GESTURE_NONE:
+                        pri_label += f": {pri_g_name}"
+                if system_active:
+                    pri_label += " [ON]"
+                detector.draw_hand_label(
+                    frame, primary_hand["bbox"],
+                    pri_label, cfg.COLOR_PRIMARY_HAND
+                )
 
+            if secondary_hand and secondary_hand["bbox"]:
+                sec_label = "SECONDARY"
+                if is_two_hand_mode:
+                    sec_g_name = coordinator.secondary_recognizer.current_gesture
+                    if sec_g_name != GESTURE_NONE:
+                        sec_label += f": {sec_g_name}"
+                detector.draw_hand_label(
+                    frame, secondary_hand["bbox"],
+                    sec_label, cfg.COLOR_SECONDARY_HAND
+                )
+
+            # Fallback mode indicator
+            if not is_two_hand_mode and len(all_hands) == 1:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(frame, "ONE-HAND FALLBACK MODE",
+                            (cfg.CAMERA_WIDTH - 280, cfg.CAMERA_HEIGHT - 10),
+                            font, 0.5, cfg.COLOR_SECONDARY, 1)
+
+            # --- Cap nhat linger ---
             if current_gesture in EVENT_GESTURES:
                 linger_gesture = current_gesture
                 linger_counter = cfg.BANNER_LINGER_FRAMES
 
-            # --- Vẽ Banner ---
+            # --- Ve Banner ---
             if linger_counter > 0 and current_gesture in (GESTURE_NONE, GESTURE_MOVE):
-                # Event vừa xảy ra → hiển thị linger
                 draw_linger_banner(frame, linger_gesture, linger_counter)
                 linger_counter -= 1
             else:
-                # Hiển thị banner bình thường
                 banner_result = draw_gesture_banner(
                     frame, current_gesture, system_active, linger_counter
                 )
@@ -435,7 +570,10 @@ def main():
             detector.draw_roi(frame)
 
             # --- Toggle progress bar ---
-            draw_toggle_progress(frame, recognizer.get_toggle_progress())
+            if is_two_hand_mode:
+                draw_toggle_progress(frame, coordinator.get_toggle_progress())
+            else:
+                draw_toggle_progress(frame, fallback_recognizer.get_toggle_progress())
 
             # --- FPS ---
             current_time = time.time()
@@ -443,33 +581,43 @@ def main():
                 fps = 1 / (current_time - prev_time)
             prev_time = current_time
 
-            # --- HUD (FPS + Gesture + Status ở góc trái) ---
+            # --- HUD ---
             detector.draw_info(frame, fps, current_gesture, system_active)
 
             # --- Mode indicator ---
-            draw_mode_indicator(frame, recognizer)
+            if is_two_hand_mode:
+                draw_mode_indicator(frame, coordinator.secondary_recognizer)
+            else:
+                draw_mode_indicator(frame, fallback_recognizer)
 
             # --- Hotkey help ---
             draw_hotkey_help(frame, system_active)
 
-            # --- Hiển thị ---
+            # --- Hien thi ---
             cv2.imshow(cfg.WINDOW_NAME, frame)
 
-            # --- Phím điều khiển ---
+            # --- Phim dieu khien ---
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == ord('Q'):
                 print("\n[INFO] Exiting...")
                 break
             elif key == ord('s') or key == ord('S'):
-                recognizer.system_active = not recognizer.system_active
-                state = "ON" if recognizer.system_active else "OFF"
+                if is_two_hand_mode:
+                    coordinator.system_active = not coordinator.system_active
+                    state = "ON" if coordinator.system_active else "OFF"
+                else:
+                    fallback_recognizer.system_active = not fallback_recognizer.system_active
+                    state = "ON" if fallback_recognizer.system_active else "OFF"
                 print(f"[KEY] System {state}")
-                # Safety: release drag when system OFF
-                if not recognizer.system_active and controller.is_dragging:
+                if state == "OFF" and controller.is_dragging:
                     controller.drag_end()
 
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted (Ctrl+C)")
+
+    except Exception as e:
+        print(f"\n[ERROR] Runtime exception: {e}")
+        traceback.print_exc()
 
     finally:
         if controller.is_dragging:

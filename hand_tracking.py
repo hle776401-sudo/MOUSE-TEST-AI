@@ -388,18 +388,169 @@ class HandDetector:
 
     def is_hand_detected(self):
         """
-        Kiểm tra xem có bàn tay nào được phát hiện không.
+        Kiem tra xem co ban tay nao duoc phat hien khong.
 
         Returns:
-            bool: True nếu phát hiện ít nhất 1 bàn tay
+            bool: True neu phat hien it nhat 1 ban tay
         """
         return (self.results is not None and
                 self.results.multi_hand_landmarks is not None and
                 len(self.results.multi_hand_landmarks) > 0)
 
+    def get_num_hands(self):
+        """Tra ve so luong ban tay detect duoc."""
+        if self.results and self.results.multi_hand_landmarks:
+            return len(self.results.multi_hand_landmarks)
+        return 0
+
+    def get_handedness(self, hand_index=0):
+        """
+        Lay handedness label (Left/Right) tu MediaPipe cho 1 tay.
+
+        Luu y: MediaPipe tra ve theo goc camera (mirror).
+          - Tay phai nguoi dung -> MediaPipe noi "Left"
+          - Tay trai nguoi dung -> MediaPipe noi "Right"
+
+        Args:
+            hand_index: Index tay can lay
+
+        Returns:
+            str: "Left" hoac "Right", hoac "Unknown"
+        """
+        if (self.results and self.results.multi_handedness and
+                hand_index < len(self.results.multi_handedness)):
+            return self.results.multi_handedness[hand_index].classification[0].label
+        return "Unknown"
+
+    def _get_hand_data(self, frame, hand_index):
+        """
+        Lay toan bo data cho 1 tay tai hand_index.
+        Helper method cho get_all_hands_data().
+
+        Returns:
+            dict hoac None neu khong co tay tai index do
+        """
+        if not self.results or not self.results.multi_hand_landmarks:
+            return None
+        if hand_index >= len(self.results.multi_hand_landmarks):
+            return None
+
+        hand = self.results.multi_hand_landmarks[hand_index]
+        h, w, _ = frame.shape
+
+        # --- Landmarks ---
+        landmarks = []
+        x_coords = []
+        y_coords = []
+
+        for lm_id, lm in enumerate(hand.landmark):
+            px = int(lm.x * w)
+            py = int(lm.y * h)
+            landmarks.append((lm_id, px, py))
+            x_coords.append(px)
+            y_coords.append(py)
+
+        # --- Bounding box ---
+        bbox = None
+        if x_coords and y_coords:
+            padding = 20
+            bbox = (
+                max(0, min(x_coords) - padding),
+                max(0, min(y_coords) - padding),
+                min(w, max(x_coords) + padding),
+                min(h, max(y_coords) + padding)
+            )
+
+        # --- Handedness ---
+        handedness = self.get_handedness(hand_index)
+
+        # --- Fingers up ---
+        # Tam set landmark_list de dung lai fingers_up()
+        old_lm = self.landmark_list
+        self.landmark_list = landmarks
+        fingers = self.fingers_up(hand_index)
+        self.landmark_list = old_lm
+
+        # --- Palm size ---
+        wrist = landmarks[cfg.WRIST] if len(landmarks) > cfg.WRIST else None
+        middle_mcp = landmarks[cfg.MIDDLE_MCP] if len(landmarks) > cfg.MIDDLE_MCP else None
+        palm_size = 0
+        if wrist and middle_mcp:
+            palm_size = np.sqrt(
+                (wrist[1] - middle_mcp[1]) ** 2 +
+                (wrist[2] - middle_mcp[2]) ** 2
+            )
+
+        # --- Hand center ---
+        center = None
+        if landmarks:
+            cx = sum(lm[1] for lm in landmarks) // len(landmarks)
+            cy = sum(lm[2] for lm in landmarks) // len(landmarks)
+            center = (cx, cy)
+
+        return {
+            "hand_index": hand_index,
+            "handedness": handedness,
+            "landmarks": landmarks,
+            "bbox": bbox,
+            "fingers": fingers,
+            "palm_size": palm_size,
+            "center": center,
+        }
+
+    def get_all_hands_data(self, frame):
+        """
+        Lay data cho TAT CA cac tay detect duoc.
+
+        Returns:
+            list[dict]: Moi dict chua:
+                - hand_index: int
+                - handedness: "Left" / "Right"
+                - landmarks: [(id, x, y), ...]
+                - bbox: (x1, y1, x2, y2) hoac None
+                - fingers: [thumb, index, middle, ring, pinky]
+                - palm_size: float
+                - center: (cx, cy) hoac None
+        """
+        num_hands = self.get_num_hands()
+        hands_data = []
+
+        for i in range(num_hands):
+            hand_data = self._get_hand_data(frame, i)
+            if hand_data and hand_data["fingers"]:  # Chi them khi co data hop le
+                hands_data.append(hand_data)
+
+        return hands_data
+
+    def draw_hand_label(self, frame, bbox, label, color):
+        """
+        Ve label (PRIMARY/SECONDARY) phia tren bbox.
+
+        Args:
+            frame: Frame anh
+            bbox: (x1, y1, x2, y2)
+            label: Text hien thi
+            color: Mau BGR
+        """
+        if not bbox:
+            return frame
+        x1, y1, x2, y2 = bbox
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        # Label background
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        text_size = cv2.getTextSize(label, font, 0.6, 2)[0]
+        cv2.rectangle(frame,
+                      (x1, y1 - text_size[1] - 8),
+                      (x1 + text_size[0] + 4, y1),
+                      color, -1)
+        cv2.putText(frame, label, (x1 + 2, y1 - 4), font,
+                    0.6, cfg.COLOR_BLACK, 2)
+        return frame
+
     def release(self):
         """
-        Giải phóng tài nguyên MediaPipe.
-        Nên gọi khi kết thúc chương trình.
+        Giai phong tai nguyen MediaPipe.
+        Nen goi khi ket thuc chuong trinh.
         """
         self.hands.close()
+

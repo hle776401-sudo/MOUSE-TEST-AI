@@ -613,11 +613,12 @@ class GestureRecognizer:
             self._swipe_frame_count = 0
             return None
 
-        # Khi chua tracking: yeu cau thumb == 0 (form chat)
-        # Khi da tracking: cho phep thumb flicker (chi can 4 ngon chinh)
-        if not self._swipe_tracking and fingers[0] != 0:
-            self._swipe_frame_count = 0
-            return None
+        # Thumb bo qua hoan toan: MediaPipe detect thumb bang truc X
+        # rat khong on dinh, flicker 0/1 lien tuc.
+        # Swipe va Toggle phan biet bang HANH VI:
+        #   Swipe = vuot nhanh < 0.5s
+        #   Toggle = giu yen 3s
+        # Toggle code da co guard: if swipe_tracking -> skip toggle
 
         # Cooldown
         if not cooldown_passed(self._swipe_cooldown_time, cfg.SWIPE_COOLDOWN, now):
@@ -754,8 +755,648 @@ class GestureRecognizer:
     # PRIVATE: THRESHOLD HELPERS
     # ======================================================================
     def _get_pinch_threshold(self, palm_size):
-        """Ngưỡng pinch ENTER: adaptive theo palm_size, fallback pixel cố định."""
+        """Nguong pinch ENTER: adaptive theo palm_size, fallback pixel co dinh."""
         if palm_size > 0:
             return palm_size * cfg.PINCH_THRESHOLD_NORMALIZED
         else:
             return cfg.CLICK_DISTANCE_THRESHOLD
+
+
+# ==============================================================================
+# PRIMARY HAND RECOGNIZER (Move, Click, Drag, Scroll)
+# ==============================================================================
+class PrimaryHandRecognizer:
+    """
+    Recognizer cho tay chinh (Primary Hand).
+    Chi xu ly: Move Cursor, Left Click, Double Click, Right Click, Drag, Scroll.
+    Khong xu ly: Swipe, Zoom, Toggle (thuoc Secondary).
+    """
+
+    def __init__(self):
+        # --- Unified Pinch ---
+        self.pinch_state = PinchState.IDLE
+        self._pinch_start_time = 0
+        self._left_click_time = 0
+        self._is_pinching_prev = False
+        self.click_anchor_pos = None
+
+        # --- Double Click ---
+        self._first_click_time = 0
+        self._waiting_double = False
+
+        # --- Right Click ---
+        self._right_click_time = 0
+        self._right_click_was_pinching = False
+
+        # --- Scroll ---
+        self._scroll_prev_y = None
+
+        # --- Stability ---
+        self._post_action_time = 0
+        self._click_freeze_until = 0
+        self.current_gesture = GESTURE_NONE
+
+    def recognize(self, landmark_list, fingers, palm_size=0):
+        """
+        Nhan dien gesture cho Primary hand.
+
+        Returns:
+            dict: {gesture, cursor_pos, scroll_delta, drag_pos,
+                   click_anchor, click_freeze_until}
+        """
+        now = time.time()
+        result = {
+            "gesture": GESTURE_NONE,
+            "cursor_pos": None,
+            "scroll_delta": None,
+            "drag_pos": None,
+            "click_anchor": None,
+            "click_freeze_until": 0,
+        }
+
+        if not landmark_list or len(landmark_list) < 21 or not fingers:
+            self._reset_states()
+            return result
+
+        # Post-action cooldown
+        if not cooldown_passed(self._post_action_time,
+                               cfg.POST_ACTION_COOLDOWN, now):
+            in_active_flow = (
+                self.pinch_state == PinchState.DRAGGING or
+                self.pinch_state == PinchState.PREPARING or
+                self._waiting_double
+            )
+            if not in_active_flow:
+                self.current_gesture = GESTURE_NONE
+                return result
+
+        # Landmarks
+        thumb_tip = (landmark_list[cfg.THUMB_TIP][1], landmark_list[cfg.THUMB_TIP][2])
+        index_tip = (landmark_list[cfg.INDEX_TIP][1], landmark_list[cfg.INDEX_TIP][2])
+        middle_tip = (landmark_list[cfg.MIDDLE_TIP][1], landmark_list[cfg.MIDDLE_TIP][2])
+
+        thumb_index_dist = calculate_distance(thumb_tip, index_tip)
+        thumb_middle_dist = calculate_distance(thumb_tip, middle_tip)
+
+        pinch_enter = self._get_pinch_threshold(palm_size)
+        pinch_exit = pinch_enter * cfg.PINCH_EXIT_MULTIPLIER
+
+        # --- PINCH (Click + Drag + Double Click) ---
+        pinch_result = self._check_pinch_action(
+            fingers, index_tip, thumb_index_dist,
+            pinch_enter, pinch_exit, now
+        )
+        if pinch_result is not None:
+            result["gesture"] = pinch_result
+            if pinch_result in (GESTURE_LEFT_CLICK, GESTURE_DOUBLE_CLICK):
+                result["cursor_pos"] = index_tip
+                result["click_anchor"] = self.click_anchor_pos
+                result["click_freeze_until"] = self._click_freeze_until
+            elif pinch_result in (GESTURE_DRAG_START, GESTURE_DRAGGING, GESTURE_DRAG_END):
+                result["drag_pos"] = index_tip
+            self.current_gesture = pinch_result
+            return result
+
+        # --- RIGHT CLICK ---
+        right_click_result = self._check_right_click(
+            fingers, thumb_middle_dist, thumb_index_dist,
+            pinch_enter, pinch_exit, now
+        )
+        if right_click_result is not None:
+            result["gesture"] = right_click_result
+            self.click_anchor_pos = middle_tip
+            result["click_anchor"] = self.click_anchor_pos
+            result["click_freeze_until"] = self._click_freeze_until
+            self.current_gesture = right_click_result
+            return result
+
+        # --- SCROLL ---
+        scroll_result = self._check_scroll(fingers, landmark_list)
+        if scroll_result is not None:
+            result["gesture"] = scroll_result[0]
+            result["scroll_delta"] = scroll_result[1]
+            self.current_gesture = scroll_result[0]
+            return result
+
+        # --- MOVE CURSOR ---
+        move_result = self._check_move_cursor(fingers, index_tip)
+        if move_result is not None:
+            result["gesture"] = GESTURE_MOVE
+            result["cursor_pos"] = move_result
+            result["click_freeze_until"] = self._click_freeze_until
+            self.current_gesture = GESTURE_MOVE
+            return result
+
+        self.current_gesture = GESTURE_NONE
+        return result
+
+    # --- Private methods (reuse logic from GestureRecognizer) ---
+
+    def _check_pinch_action(self, fingers, index_tip, thumb_index_dist,
+                            enter_threshold, exit_threshold, now):
+        # Guard: middle up -> skip pinch (nhu cu, nhung tren primary
+        # khong co zoom nen chi la safety)
+        if fingers[2] == 1 and self.pinch_state != PinchState.DRAGGING:
+            return None
+
+        if self._is_pinching_prev:
+            is_pinching = thumb_index_dist < exit_threshold
+        else:
+            is_pinching = thumb_index_dist < enter_threshold
+        self._is_pinching_prev = is_pinching
+
+        if self.pinch_state == PinchState.IDLE:
+            if is_pinching and fingers[1] == 1:
+                self.pinch_state = PinchState.PREPARING
+                self._pinch_start_time = now
+                self.click_anchor_pos = index_tip
+            return None
+
+        if self.pinch_state == PinchState.PREPARING:
+            if not is_pinching:
+                self.pinch_state = PinchState.IDLE
+                if cooldown_passed(self._left_click_time, cfg.CLICK_COOLDOWN, now):
+                    self._left_click_time = now
+                    self._post_action_time = now
+                    self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
+                    if (self._waiting_double and
+                            (now - self._first_click_time) <= cfg.DOUBLE_CLICK_TIME_WINDOW):
+                        self._waiting_double = False
+                        self._first_click_time = 0
+                        return GESTURE_DOUBLE_CLICK
+                    else:
+                        self._first_click_time = now
+                        self._waiting_double = True
+                        return GESTURE_LEFT_CLICK
+                return None
+
+            hold_duration = now - self._pinch_start_time
+            if hold_duration >= cfg.PINCH_HOLD_THRESHOLD:
+                self.pinch_state = PinchState.DRAGGING
+                self._waiting_double = False
+                return GESTURE_DRAG_START
+            return None
+
+        if self.pinch_state == PinchState.DRAGGING:
+            if not is_pinching:
+                self.pinch_state = PinchState.IDLE
+                self._post_action_time = now
+                return GESTURE_DRAG_END
+            return GESTURE_DRAGGING
+
+        return None
+
+    def _check_right_click(self, fingers, thumb_middle_dist, thumb_index_dist,
+                           enter_threshold, exit_threshold, now):
+        # Khong can guard zoom vi primary khong co zoom
+        if not self._right_click_was_pinching:
+            if not (fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0):
+                return None
+            if thumb_middle_dist >= thumb_index_dist:
+                return None
+            if thumb_middle_dist < enter_threshold:
+                self._right_click_was_pinching = True
+            return None
+
+        is_pinching = thumb_middle_dist < exit_threshold
+        if not is_pinching:
+            self._right_click_was_pinching = False
+            if cooldown_passed(self._right_click_time, cfg.CLICK_COOLDOWN, now):
+                self._right_click_time = now
+                self._post_action_time = now
+                self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
+                return GESTURE_RIGHT_CLICK
+            return None
+        return None
+
+    def _check_move_cursor(self, fingers, index_tip):
+        if (fingers[1] == 1 and fingers[2] == 0 and
+                fingers[3] == 0 and fingers[4] == 0):
+            return index_tip
+        return None
+
+    def _check_scroll(self, fingers, landmark_list):
+        is_fist = (fingers[1] == 0 and fingers[2] == 0 and
+                   fingers[3] == 0 and fingers[4] == 0)
+        if not is_fist:
+            self._scroll_prev_y = None
+            return None
+
+        # Dung hand center tu landmarks
+        current_y = sum(lm[2] for lm in landmark_list) // len(landmark_list)
+
+        if self._scroll_prev_y is None:
+            self._scroll_prev_y = current_y
+            return None
+
+        delta_y = current_y - self._scroll_prev_y
+        if abs(delta_y) >= cfg.SCROLL_SENSITIVITY:
+            self._scroll_prev_y = current_y
+            if delta_y > 0:
+                return (GESTURE_SCROLL_DOWN, -cfg.SCROLL_SPEED)
+            else:
+                return (GESTURE_SCROLL_UP, cfg.SCROLL_SPEED)
+        return None
+
+    def _get_pinch_threshold(self, palm_size):
+        if palm_size > 0:
+            return palm_size * cfg.PINCH_THRESHOLD_NORMALIZED
+        return cfg.CLICK_DISTANCE_THRESHOLD
+
+    def _reset_states(self):
+        self.pinch_state = PinchState.IDLE
+        self._is_pinching_prev = False
+        self._scroll_prev_y = None
+        self._right_click_was_pinching = False
+        self._waiting_double = False
+        self.click_anchor_pos = None
+        self._click_freeze_until = 0
+        self.current_gesture = GESTURE_NONE
+
+
+# ==============================================================================
+# SECONDARY HAND RECOGNIZER (Swipe, Zoom, Toggle)
+# ==============================================================================
+class SecondaryHandRecognizer:
+    """
+    Recognizer cho tay phu (Secondary Hand).
+    Chi xu ly: Swipe Left/Right, Zoom In/Out, System Toggle.
+    Khong xu ly: Move, Click, Drag, Scroll (thuoc Primary).
+    """
+
+    def __init__(self):
+        self.system_active = cfg.SYSTEM_ACTIVE_DEFAULT
+
+        # --- Toggle ---
+        self._toggle_start_time = 0
+        self._toggle_active = False
+        self._toggle_cooldown_time = 0
+        self._five_fingers_start = 0
+
+        # --- Swipe ---
+        self._swipe_tracking = False
+        self._swipe_start_x = 0
+        self._swipe_start_time = 0
+        self._swipe_cooldown_time = 0
+        self._swipe_frame_count = 0
+
+        # --- Zoom ---
+        self._zoom_active = False
+        self._zoom_prev_distance = 0
+        self._zoom_delta_acc = 0
+        self._zoom_cooldown_time = 0
+        self._zoom_frame_count = 0
+
+        # --- State ---
+        self._post_action_time = 0
+        self._prev_hand_center = None
+        self.current_gesture = GESTURE_NONE
+
+    def recognize(self, landmark_list, fingers, palm_size=0, hand_center=None):
+        """
+        Nhan dien gesture cho Secondary hand.
+
+        Returns:
+            dict: {gesture, system_active}
+        """
+        now = time.time()
+        result = {
+            "gesture": GESTURE_NONE,
+            "system_active": self.system_active,
+        }
+
+        if not landmark_list or len(landmark_list) < 21 or not fingers:
+            self._reset_states()
+            self.current_gesture = GESTURE_NONE
+            self._prev_hand_center = hand_center
+            return result
+
+        # --- TOGGLE (luon check) ---
+        toggle_result = self._check_system_toggle(fingers, hand_center, now)
+        if toggle_result is not None:
+            result["gesture"] = toggle_result
+            result["system_active"] = self.system_active
+            self.current_gesture = toggle_result
+            self._prev_hand_center = hand_center
+            return result
+
+        # Neu system OFF -> chi hien Open Palm
+        if not self.system_active:
+            if sum(fingers) == 5:
+                result["gesture"] = GESTURE_OPEN_PALM
+            self._reset_states()
+            self.current_gesture = result["gesture"]
+            self._prev_hand_center = hand_center
+            return result
+
+        # Post-action cooldown
+        if not cooldown_passed(self._post_action_time,
+                               cfg.POST_ACTION_COOLDOWN, now):
+            self.current_gesture = GESTURE_NONE
+            self._prev_hand_center = hand_center
+            return result
+
+        # Landmarks
+        thumb_tip = (landmark_list[cfg.THUMB_TIP][1], landmark_list[cfg.THUMB_TIP][2])
+        index_tip = (landmark_list[cfg.INDEX_TIP][1], landmark_list[cfg.INDEX_TIP][2])
+        middle_tip = (landmark_list[cfg.MIDDLE_TIP][1], landmark_list[cfg.MIDDLE_TIP][2])
+
+        thumb_index_dist = calculate_distance(thumb_tip, index_tip)
+        thumb_middle_dist = calculate_distance(thumb_tip, middle_tip)
+
+        pinch_enter = self._get_pinch_threshold(palm_size)
+
+        # --- ZOOM (uu tien truoc swipe) ---
+        zoom_result = self._check_zoom(fingers, thumb_index_dist,
+                                        thumb_middle_dist, pinch_enter, now)
+        if zoom_result is not None:
+            result["gesture"] = zoom_result
+            self.current_gesture = zoom_result
+            self._prev_hand_center = hand_center
+            return result
+
+        # --- SWIPE ---
+        swipe_result = self._check_swipe(fingers, hand_center, now)
+        if swipe_result is not None:
+            result["gesture"] = swipe_result
+            self.current_gesture = swipe_result
+            self._prev_hand_center = hand_center
+            return result
+
+        self.current_gesture = GESTURE_NONE
+        self._prev_hand_center = hand_center
+        return result
+
+    # --- Toggle (copy tu GestureRecognizer) ---
+    def _check_system_toggle(self, fingers, hand_center, now):
+        if not cooldown_passed(self._toggle_cooldown_time,
+                               cfg.SYSTEM_TOGGLE_COOLDOWN, now):
+            return None
+
+        finger_count = sum(fingers)
+        if finger_count == cfg.SYSTEM_TOGGLE_FINGERS:
+            if self._swipe_tracking:
+                self._toggle_active = False
+                self._five_fingers_start = 0
+                return None
+
+            if (self._prev_hand_center is not None and hand_center is not None):
+                dx = abs(hand_center[0] - self._prev_hand_center[0])
+                if dx > cfg.SWIPE_THRESHOLD_X * 0.3:
+                    self._toggle_active = False
+                    self._five_fingers_start = 0
+                    return None
+
+            if self._five_fingers_start == 0:
+                self._five_fingers_start = now
+                return None
+
+            if (now - self._five_fingers_start) < cfg.OPEN_PALM_GRACE_PERIOD:
+                return None
+
+            if not self._toggle_active:
+                self._toggle_start_time = now
+                self._toggle_active = True
+                return GESTURE_OPEN_PALM
+
+            elapsed = now - self._toggle_start_time
+            if elapsed >= cfg.SYSTEM_TOGGLE_HOLD_TIME:
+                self.system_active = not self.system_active
+                self._toggle_active = False
+                self._toggle_cooldown_time = now
+                self._five_fingers_start = 0
+                self._reset_states()
+                return GESTURE_SYSTEM_TOGGLE
+
+            return GESTURE_OPEN_PALM
+        else:
+            self._toggle_active = False
+            self._five_fingers_start = 0
+            return None
+
+    # --- Zoom (copy tu GestureRecognizer) ---
+    def _check_zoom(self, fingers, thumb_index_dist, thumb_middle_dist,
+                    pinch_enter, now):
+        is_zoom_mode = (
+            fingers[1] == 1 and fingers[2] == 1 and
+            fingers[3] == 0 and fingers[4] == 0
+        )
+        if is_zoom_mode and thumb_middle_dist < pinch_enter * 1.5:
+            is_zoom_mode = False
+
+        if not is_zoom_mode:
+            if self._zoom_active:
+                self._zoom_active = False
+                self._zoom_prev_distance = 0
+                self._zoom_delta_acc = 0
+            self._zoom_frame_count = 0
+            return None
+
+        self._zoom_frame_count += 1
+        if self._zoom_frame_count < cfg.ZOOM_STABLE_FRAMES:
+            return None
+
+        if not self._zoom_active:
+            self._zoom_active = True
+            self._zoom_prev_distance = thumb_index_dist
+            self._zoom_delta_acc = 0
+            return None
+
+        delta = thumb_index_dist - self._zoom_prev_distance
+        self._zoom_prev_distance = thumb_index_dist
+        self._zoom_delta_acc += delta
+
+        if not cooldown_passed(self._zoom_cooldown_time, cfg.ZOOM_COOLDOWN, now):
+            return None
+
+        if self._zoom_delta_acc > cfg.ZOOM_DELTA_THRESHOLD:
+            self._zoom_delta_acc = 0
+            self._zoom_cooldown_time = now
+            self._post_action_time = now
+            return GESTURE_ZOOM_IN
+
+        if self._zoom_delta_acc < -cfg.ZOOM_DELTA_THRESHOLD:
+            self._zoom_delta_acc = 0
+            self._zoom_cooldown_time = now
+            self._post_action_time = now
+            return GESTURE_ZOOM_OUT
+
+        return None
+
+    # --- Swipe (copy tu GestureRecognizer) ---
+    def _check_swipe(self, fingers, hand_center, now):
+        # 4 ngon chinh phai gio
+        four_fingers_up = (fingers[1] == 1 and fingers[2] == 1 and
+                           fingers[3] == 1 and fingers[4] == 1)
+
+        if hand_center is None or not four_fingers_up:
+            self._swipe_tracking = False
+            self._swipe_frame_count = 0
+            return None
+
+        # ENTERING: yeu cau thumb == 0 (tach biet voi Toggle 5 ngon)
+        # TRACKING: bo qua thumb (cho phep flicker)
+        if not self._swipe_tracking and fingers[0] != 0:
+            self._swipe_frame_count = 0
+            return None
+
+        if not cooldown_passed(self._swipe_cooldown_time, cfg.SWIPE_COOLDOWN, now):
+            return None
+
+        current_x = hand_center[0]
+
+        if not self._swipe_tracking:
+            self._swipe_frame_count += 1
+            if self._swipe_frame_count < cfg.SWIPE_STABLE_FRAMES:
+                return None
+            self._swipe_tracking = True
+            if self._prev_hand_center is not None:
+                self._swipe_start_x = self._prev_hand_center[0]
+            else:
+                self._swipe_start_x = current_x
+            self._swipe_start_time = now
+            return None
+
+        elapsed = now - self._swipe_start_time
+        if elapsed > cfg.SWIPE_TIME_WINDOW:
+            self._swipe_tracking = False
+            self._swipe_frame_count = 0
+            return None
+
+        delta_x = current_x - self._swipe_start_x
+        if abs(delta_x) >= cfg.SWIPE_THRESHOLD_X:
+            self._swipe_tracking = False
+            self._swipe_cooldown_time = now
+            self._post_action_time = now
+            if delta_x > 0:
+                return GESTURE_SWIPE_RIGHT
+            else:
+                return GESTURE_SWIPE_LEFT
+
+        return None
+
+    # --- Helpers ---
+    def get_toggle_progress(self):
+        if not self._toggle_active:
+            return 0.0
+        elapsed = time.time() - self._toggle_start_time
+        return min(elapsed / cfg.SYSTEM_TOGGLE_HOLD_TIME, 1.0)
+
+    def get_state_info(self):
+        """Thong tin state cho UI (tuong thich voi draw_mode_indicator)."""
+        return {
+            "system_active": self.system_active,
+            "current_gesture": self.current_gesture,
+            "pinch_state": "idle",
+            "toggle_progress": self.get_toggle_progress(),
+            "waiting_double": False,
+            "swipe_tracking": self._swipe_tracking,
+            "zoom_active": self._zoom_active,
+            "click_freeze_until": 0,
+        }
+
+    def _get_pinch_threshold(self, palm_size):
+        if palm_size > 0:
+            return palm_size * cfg.PINCH_THRESHOLD_NORMALIZED
+        return cfg.CLICK_DISTANCE_THRESHOLD
+
+    def _reset_states(self):
+        self._swipe_tracking = False
+        self._swipe_frame_count = 0
+        self._zoom_active = False
+        self._zoom_prev_distance = 0
+        self._zoom_delta_acc = 0
+        self._zoom_frame_count = 0
+        self.current_gesture = GESTURE_NONE
+
+
+# ==============================================================================
+# GESTURE COORDINATOR (dieu phoi 2 tay)
+# ==============================================================================
+class GestureCoordinator:
+    """
+    Dieu phoi gesture giua Primary va Secondary hand.
+
+    - Goi PrimaryHandRecognizer cho tay chinh
+    - Goi SecondaryHandRecognizer cho tay phu
+    - Ap lock giua hai tay
+    - Quan ly system_active toan cuc
+    """
+
+    def __init__(self):
+        self.primary_recognizer = PrimaryHandRecognizer()
+        self.secondary_recognizer = SecondaryHandRecognizer()
+
+    @property
+    def system_active(self):
+        return self.secondary_recognizer.system_active
+
+    @system_active.setter
+    def system_active(self, value):
+        self.secondary_recognizer.system_active = value
+
+    def process(self, primary_hand, secondary_hand):
+        """
+        Xu ly gesture cho ca 2 tay.
+
+        Args:
+            primary_hand: dict tu get_all_hands_data() hoac None
+            secondary_hand: dict tu get_all_hands_data() hoac None
+
+        Returns:
+            dict: {
+                primary_result: dict gesture result cho primary,
+                secondary_result: dict gesture result cho secondary,
+                system_active: bool
+            }
+        """
+        # --- Secondary truoc (vi Toggle anh huong system_active) ---
+        secondary_result = {"gesture": GESTURE_NONE, "system_active": self.system_active}
+
+        if secondary_hand:
+            secondary_result = self.secondary_recognizer.recognize(
+                secondary_hand["landmarks"],
+                secondary_hand["fingers"],
+                secondary_hand["palm_size"],
+                secondary_hand["center"]
+            )
+
+        # --- Primary (chi chay khi system ON) ---
+        primary_result = {
+            "gesture": GESTURE_NONE,
+            "cursor_pos": None,
+            "scroll_delta": None,
+            "drag_pos": None,
+            "click_anchor": None,
+            "click_freeze_until": 0,
+        }
+
+        if primary_hand and self.system_active:
+            # LOCK: neu secondary dang zoom -> primary van chay binh thuong
+            # (2 tay khac nhau, khong xung dot)
+            primary_result = self.primary_recognizer.recognize(
+                primary_hand["landmarks"],
+                primary_hand["fingers"],
+                primary_hand["palm_size"]
+            )
+
+        elif primary_hand and not self.system_active:
+            # System OFF -> reset primary states
+            self.primary_recognizer._reset_states()
+
+        # LOCK: neu primary dang dragging -> block secondary swipe/zoom
+        if self.primary_recognizer.pinch_state == PinchState.DRAGGING:
+            sec_gesture = secondary_result.get("gesture", GESTURE_NONE)
+            if sec_gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+                               GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                secondary_result["gesture"] = GESTURE_NONE
+
+        return {
+            "primary_result": primary_result,
+            "secondary_result": secondary_result,
+            "system_active": self.system_active,
+        }
+
+    def get_toggle_progress(self):
+        return self.secondary_recognizer.get_toggle_progress()
+
