@@ -202,3 +202,27 @@ FINGER_PIPS = [THUMB_IP, INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP]
 # 8. TRẠNG THÁI HỆ THỐNG
 # ==============================================================================
 SYSTEM_ACTIVE_DEFAULT = False       # Hệ thống mặc định TẮT khi khởi động
+
+# ==============================================================================
+# 9. VOICE INPUT (nhập liệu bằng giọng nói)
+# ==============================================================================
+# Flow: nhấn hotkey → mic nghe → STT → gõ text vào ô đang focus
+#
+# State flow:
+#   VOICE_IDLE → VOICE_LISTENING → VOICE_RECOGNIZING → VOICE_TYPING → VOICE_DONE
+#                     ↓                    ↓
+#                VOICE_ERROR          VOICE_ERROR
+#
+ENABLE_VOICE_INPUT = True           # Bật/tắt chức năng voice input
+VOICE_HOTKEY = "ctrl+shift+v"       # Global hotkey bat voice (khong can focus cua so webcam)
+                                    # Nguoi dung click vao o nhap tren browser, giu focus o do
+                                    # roi nhan Ctrl+Shift+V -> browser van co focus -> paste dung cho
+VOICE_LANGUAGE = "vi-VN"            # Ngôn ngữ nhận diện giọng nói (vi-VN / en-US / ja-JP ...)
+VOICE_LISTEN_TIMEOUT = 5            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
+                                    # Nếu im lặng quá lâu → VOICE_ERROR
+VOICE_PHRASE_TIME_LIMIT = 10        # Thời gian tối đa cho 1 câu nói (giây)
+                                    # Sau thời gian này tự cắt và gửi STT
+VOICE_AUTO_ENTER = False            # True = tự nhấn Enter sau khi gõ xong text
+VOICE_TYPING_SPEED = 0.02          # Delay giữa mỗi ký tự khi gõ (giây), 0 = gõ tức thời
+VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
+COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)

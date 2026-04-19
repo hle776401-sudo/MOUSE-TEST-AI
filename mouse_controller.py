@@ -262,5 +262,85 @@ class MouseController:
         pyautogui.hotkey('ctrl', '-')
         print("[ACTION] Zoom Out -> Ctrl+-")
 
+    def type_text(self, text):
+        """
+        Go text vao o dang duoc focus bang cach:
+          1. Copy text vao clipboard qua Windows API (ctypes) -- KHONG steal focus
+          2. Paste bang Ctrl+V
+
+        Ly do dung ctypes thay vi tkinter:
+          - tkinter.Tk() steal focus khoi browser du da withdraw()
+          - Ctrl+V se paste vao cua so sai neu focus bi mat
+          - ctypes goi thang Windows clipboard API, khong tao window, khong mat focus
+
+        Args:
+            text: Chuoi can go. Neu rong thi khong lam gi.
+        """
+        import time as _time
+        import ctypes
+        from ctypes import wintypes
+
+        if not text:
+            return
+
+        try:
+            # --- Copy text vao clipboard qua Windows API (khong steal focus) ---
+            CF_UNICODETEXT = 13
+            GMEM_MOVEABLE = 0x0002
+
+            kernel32 = ctypes.windll.kernel32
+            user32   = ctypes.windll.user32
+
+            # Khai bao restype de xu ly 64-bit pointer dung
+            kernel32.GlobalAlloc.restype  = ctypes.c_void_p
+            kernel32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            kernel32.GlobalLock.restype   = ctypes.c_void_p
+            kernel32.GlobalLock.argtypes  = [ctypes.c_void_p]
+            kernel32.GlobalUnlock.restype = ctypes.c_bool
+            kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            user32.OpenClipboard.restype  = ctypes.c_bool
+            user32.EmptyClipboard.restype = ctypes.c_bool
+            user32.SetClipboardData.restype  = ctypes.c_void_p
+            user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            user32.CloseClipboard.restype = ctypes.c_bool
+
+            text_bytes = text.encode('utf-16-le') + b'\x00\x00'
+
+            h_mem = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(text_bytes))
+            if not h_mem:
+                raise RuntimeError("GlobalAlloc failed")
+
+            mem_ptr = kernel32.GlobalLock(h_mem)
+            if not mem_ptr:
+                raise RuntimeError("GlobalLock failed")
+
+            ctypes.memmove(mem_ptr, text_bytes, len(text_bytes))
+            kernel32.GlobalUnlock(h_mem)
+
+            if not user32.OpenClipboard(None):
+                raise RuntimeError("OpenClipboard failed")
+            user32.EmptyClipboard()
+            user32.SetClipboardData(CF_UNICODETEXT, h_mem)
+            user32.CloseClipboard()
+
+            # Delay nho truoc khi paste
+            _time.sleep(cfg.VOICE_TYPING_SPEED)
+
+            # Paste bang Ctrl+V vao cua so dang focus (browser van giu focus)
+            pyautogui.hotkey('ctrl', 'v')
+
+            print(f"[VOICE] Typed: '{text}'")
+
+        except Exception as e:
+            print(f"[VOICE] type_text error: {e}")
+
+    def press_enter(self):
+        """
+        Nhan phim Enter.
+        Dung sau type_text() neu VOICE_AUTO_ENTER = True.
+        """
+        pyautogui.press('enter')
+        print("[VOICE] Pressed Enter")
+
     def get_screen_size(self):
         return (self.screen_w, self.screen_h)

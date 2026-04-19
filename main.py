@@ -26,6 +26,7 @@ Demo UI:
 import cv2
 import time
 import traceback
+import threading
 import config as cfg
 from hand_tracking import HandDetector
 from gesture_recognition import (
@@ -39,6 +40,10 @@ from gesture_recognition import (
     GESTURE_SYSTEM_TOGGLE, GESTURE_OPEN_PALM
 )
 from mouse_controller import MouseController
+
+if cfg.ENABLE_VOICE_INPUT:
+    import keyboard
+    from voice_input import VoiceInputManager, VoiceState
 
 
 # ==============================================================================
@@ -338,6 +343,46 @@ def main():
     coordinator = GestureCoordinator()          # 2-hand mode
     fallback_recognizer = GestureRecognizer()   # 1-hand fallback
     controller = MouseController()
+
+    # --- Voice Input ---
+    if cfg.ENABLE_VOICE_INPUT:
+        voice_manager = VoiceInputManager()
+        voice_thread = None             # Thread hien tai (None = chua chay)
+        voice_state = VoiceState.IDLE   # State hien thi tren UI
+        voice_result_text = ""          # Text nhan duoc gan nhat
+
+        # --- Dang ky global hotkey (khong can focus cua so webcam) ---
+        def _on_voice_hotkey():
+            """Callback khi nguoi dung nhan global hotkey."""
+            nonlocal voice_thread, voice_state, voice_result_text
+            if voice_thread is not None and voice_thread.is_alive():
+                print("[VOICE] Already listening, please wait...")
+                return
+            voice_manager.reset()
+            voice_state = VoiceState.LISTENING
+            voice_result_text = ""
+            print(f"[VOICE] Triggered via {cfg.VOICE_HOTKEY} — listening...")
+
+            def _voice_worker():
+                nonlocal voice_state, voice_result_text
+                result = voice_manager.listen_and_recognize()
+                if result["state"] == VoiceState.DONE:
+                    voice_result_text = result["text"]
+                    voice_state = VoiceState.TYPING
+                    controller.type_text(result["text"])
+                    if cfg.VOICE_AUTO_ENTER:
+                        controller.press_enter()
+                    voice_state = VoiceState.DONE
+                else:
+                    voice_result_text = ""
+                    voice_state = VoiceState.ERROR
+                    print(f"[VOICE] Error: {result['error']}")
+
+            voice_thread = threading.Thread(target=_voice_worker, daemon=True)
+            voice_thread.start()
+
+        keyboard.add_hotkey(cfg.VOICE_HOTKEY, _on_voice_hotkey)
+        print(f"  Voice Input: ON (hotkey: {cfg.VOICE_HOTKEY.upper()})")
 
     # Track which mode is active
     is_two_hand_mode = False
@@ -686,7 +731,7 @@ def main():
                     detector.draw_custom_landmarks(frame)
                 else:
                     current_gesture = GESTURE_NONE
-                    system_active = coordinator.system_active if is_two_hand_mode else fallback_recognizer.system_active
+                    system_active = coordinator.system_active  # Luon dung coordinator lam source chinh
                     gesture_result = {
                         "gesture": GESTURE_NONE,
                         "cursor_pos": None,
@@ -699,9 +744,18 @@ def main():
 
             elif num_hands == 0:
                 # ====== KHONG CO TAY ======
-                gesture_result = fallback_recognizer.recognize([], [], 0, None)
+                # Khong goi fallback_recognizer nua — giu state tu coordinator
                 current_gesture = GESTURE_NONE
-                system_active = fallback_recognizer.system_active if not is_two_hand_mode else coordinator.system_active
+                system_active = coordinator.system_active
+                gesture_result = {
+                    "gesture": GESTURE_NONE,
+                    "cursor_pos": None,
+                    "scroll_delta": None,
+                    "drag_pos": None,
+                    "system_active": system_active,
+                    "click_anchor": None,
+                    "click_freeze_until": 0,
+                }
                 if controller.is_dragging:
                     controller.drag_end()
 
@@ -768,10 +822,8 @@ def main():
             detector.draw_roi(frame)
 
             # --- Toggle progress bar ---
-            if is_two_hand_mode:
-                draw_toggle_progress(frame, coordinator.get_toggle_progress())
-            else:
-                draw_toggle_progress(frame, fallback_recognizer.get_toggle_progress())
+            # Luon lay tu coordinator.secondary_recognizer (nguon toggle chinh)
+            draw_toggle_progress(frame, coordinator.get_toggle_progress())
 
             # --- FPS ---
             current_time = time.time()
@@ -783,13 +835,40 @@ def main():
             detector.draw_info(frame, fps, current_gesture, system_active)
 
             # --- Mode indicator ---
-            if is_two_hand_mode:
-                draw_mode_indicator(frame, coordinator.secondary_recognizer)
-            else:
-                draw_mode_indicator(frame, fallback_recognizer)
+            # Luon lay tu coordinator.secondary_recognizer (nguon zoom/swipe chinh)
+            draw_mode_indicator(frame, coordinator.secondary_recognizer)
 
             # --- Hotkey help ---
             draw_hotkey_help(frame, system_active)
+
+            # --- Voice status overlay ---
+            if cfg.ENABLE_VOICE_INPUT and cfg.VOICE_STATUS_DISPLAY:
+                is_busy = (voice_thread is not None and voice_thread.is_alive())
+                if is_busy or voice_state not in (VoiceState.IDLE, VoiceState.DONE, VoiceState.ERROR):
+                    # Chon text + mau theo state
+                    if voice_state == VoiceState.LISTENING:
+                        v_text = f"[MIC] LISTENING... (say something)"
+                        v_color = cfg.COLOR_VOICE
+                    elif voice_state == VoiceState.RECOGNIZING:
+                        v_text = "[MIC] RECOGNIZING..."
+                        v_color = cfg.COLOR_VOICE
+                    elif voice_state == VoiceState.TYPING:
+                        v_text = f"[MIC] TYPING: {voice_result_text[:30]}"
+                        v_color = cfg.COLOR_SUCCESS
+                    else:
+                        v_text = f"[MIC] {voice_state}"
+                        v_color = cfg.COLOR_VOICE
+                    cv2.putText(frame, v_text,
+                                (10, cfg.CAMERA_HEIGHT - 45),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, v_color, 2)
+                elif voice_state == VoiceState.ERROR:
+                    cv2.putText(frame, f"[MIC] Error (press {cfg.VOICE_HOTKEY.upper()} to retry)",
+                                (10, cfg.CAMERA_HEIGHT - 45),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.COLOR_DANGER, 1)
+                elif voice_state == VoiceState.DONE and voice_result_text:
+                    cv2.putText(frame, f"[MIC] Done: {voice_result_text[:35]}",
+                                (10, cfg.CAMERA_HEIGHT - 45),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.COLOR_SUCCESS, 1)
 
             # --- Hien thi ---
             cv2.imshow(cfg.WINDOW_NAME, frame)
@@ -800,15 +879,14 @@ def main():
                 print("\n[INFO] Exiting...")
                 break
             elif key == ord('s') or key == ord('S'):
-                if is_two_hand_mode:
-                    coordinator.system_active = not coordinator.system_active
-                    state = "ON" if coordinator.system_active else "OFF"
-                else:
-                    fallback_recognizer.system_active = not fallback_recognizer.system_active
-                    state = "ON" if fallback_recognizer.system_active else "OFF"
+                # Luon toggle coordinator.system_active — nguon state doc nhat
+                coordinator.system_active = not coordinator.system_active
+                state = "ON" if coordinator.system_active else "OFF"
                 print(f"[KEY] System {state}")
                 if state == "OFF" and controller.is_dragging:
                     controller.drag_end()
+
+            # (Voice duoc xu ly qua global hotkey, khong can cv2 key handler o day)
 
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted (Ctrl+C)")
@@ -820,6 +898,8 @@ def main():
     finally:
         if controller.is_dragging:
             controller.drag_end()
+        if cfg.ENABLE_VOICE_INPUT:
+            keyboard.unhook_all_hotkeys()   # Giai phong global hotkey khi thoat
         cap.release()
         detector.release()
         cv2.destroyAllWindows()
