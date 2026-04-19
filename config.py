@@ -33,14 +33,21 @@ ENABLE_TWO_HAND_MODE = True         # Bat che do 2 tay (True = 2 tay, False = fa
 DOMINANT_HAND = "Right"             # Tay thuan cua nguoi dung (Right/Left)
                                     # Tay thuan = Primary (dieu khien cursor)
                                     # Tay con lai = Secondary (lenh he thong)
-# Vai tro tay (tu dong tinh tu DOMINANT_HAND)
-# MediaPipe tra ve handedness theo goc nhin CAMERA (mirror):
-#   - Tay phai nguoi dung -> MediaPipe noi "Left" (vi mirror)
-#   - Tay trai nguoi dung -> MediaPipe noi "Right" (vi mirror)
-# PRIMARY = tay thuan (cursor), SECONDARY = tay phu (system)
-PRIMARY_HAND_LABEL = "Left" if DOMINANT_HAND == "Right" else "Right"  # MediaPipe label (mirror)
-SECONDARY_HAND_LABEL = "Right" if DOMINANT_HAND == "Right" else "Left"  # MediaPipe label (mirror)
-ALLOW_ONE_HAND_FALLBACK = True      # Cho phep fallback 1 tay khi chi detect 1 tay
+
+# ===== HANDEDNESS MAPPING =====
+# Ket qua test thuc te (test_handedness.py):
+#   Tay PHAI nguoi dung -> MediaPipe tra ve "Right"
+#   Tay TRAI nguoi dung -> MediaPipe tra ve "Left"
+PRIMARY_HAND_LABEL = "Right"        # MP label cua tay PHAI = Primary
+SECONDARY_HAND_LABEL = "Left"       # MP label cua tay TRAI = Secondary
+
+# --- Debug handedness ---
+SHOW_HANDEDNESS_DEBUG = True        # Hien thi raw MediaPipe label tren overlay de verify
+
+# --- Mode switching hysteresis ---
+# Tranh nhay mode lien tuc khi MediaPipe hut tay 1-2 frame
+MODE_ENTER_TWO_HAND_FRAMES = 5     # Phai thay 2 tay lien tuc 5 frame moi vao 2-hand mode
+MODE_EXIT_TWO_HAND_FRAMES = 30     # Phai mat 1 tay lien tuc 30 frame (~1 giay) moi roi ve fallback
 
 # --- Mau label 2 tay ---
 COLOR_PRIMARY_HAND = (0, 255, 0)    # Xanh la - Primary hand bbox
@@ -70,6 +77,10 @@ SWIPE_THRESHOLD_X = 80              # Di chuyển ngang tối thiểu để trig
 SWIPE_TIME_WINDOW = 0.5             # Thời gian tối đa cho 1 lần swipe (giây)
 SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
 SWIPE_STABLE_FRAMES = 2             # Số frame liên tục thỏa điều kiện mới bắt đầu tracking
+SWIPE_MODE = "browser"              # Chon che do swipe:
+                                    #   "arrow"   = right/left (PowerPoint, Google Slides)
+                                    #   "page"    = pagedown/pageup (PDF viewer)
+                                    #   "browser" = Alt+Left / Alt+Right (trinh duyet web)
 
 # --- System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle

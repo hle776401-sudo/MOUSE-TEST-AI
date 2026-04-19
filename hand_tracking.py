@@ -407,9 +407,9 @@ class HandDetector:
         """
         Lay handedness label (Left/Right) tu MediaPipe cho 1 tay.
 
-        Luu y: MediaPipe tra ve theo goc camera (mirror).
-          - Tay phai nguoi dung -> MediaPipe noi "Left"
-          - Tay trai nguoi dung -> MediaPipe noi "Right"
+        Luu y: Ket qua test thuc te (sau cv2.flip):
+          - Tay phai nguoi dung -> MediaPipe tra ve "Right"
+          - Tay trai nguoi dung -> MediaPipe tra ve "Left"
 
         Args:
             hand_index: Index tay can lay

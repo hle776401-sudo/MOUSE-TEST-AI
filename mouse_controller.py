@@ -217,36 +217,50 @@ class MouseController:
 
     def swipe_action(self, gesture_name):
         """
-        Hành động swipe — điều khiển trình chiếu.
+        Hanh dong swipe — dieu khien trinh chieu / trinh duyet.
 
         Mapping:
-          Vuốt trái  = Nội dung kế tiếp  → press('right')   (next slide)
-          Vuốt phải = Nội dung trước    → press('left')    (prev slide)
+          Vuot trai  = Noi dung ke tiep
+          Vuot phai  = Noi dung truoc
 
-        Tương thích: PowerPoint, Google Slides, PDF viewer, image viewer.
-        Fallback nếu cần: PageDown / PageUp (có thể đổi tại đây).
+        Config cfg.SWIPE_MODE:
+          "arrow"   -> press('right'/'left')     (PowerPoint, Google Slides)
+          "page"    -> press('pagedown'/'pageup') (PDF viewer)
+          "browser" -> hotkey('alt','right'/'left') (trinh duyet web)
         """
+        mode = cfg.SWIPE_MODE
+
         if gesture_name == "Swipe Left":
-            # Vuốt trái = sang nội dung kế tiếp (next)
-            pyautogui.press('right')
-            # Fallback: pyautogui.press('pagedown')
+            if mode == "page":
+                pyautogui.press('pagedown')
+                print("[ACTION] Swipe Left -> press('pagedown')")
+            elif mode == "browser":
+                pyautogui.hotkey('alt', 'right')
+                print("[ACTION] Swipe Left -> hotkey('alt','right')")
+            else:
+                pyautogui.press('right')
+                print("[ACTION] Swipe Left -> press('right')")
+
         elif gesture_name == "Swipe Right":
-            # Vuốt phải = quay lại nội dung trước (prev)
-            pyautogui.press('left')
-            # Fallback: pyautogui.press('pageup')
+            if mode == "page":
+                pyautogui.press('pageup')
+                print("[ACTION] Swipe Right -> press('pageup')")
+            elif mode == "browser":
+                pyautogui.hotkey('alt', 'left')
+                print("[ACTION] Swipe Right -> hotkey('alt','left')")
+            else:
+                pyautogui.press('left')
+                print("[ACTION] Swipe Right -> press('left')")
 
     def zoom_in(self):
-        """
-        Zoom In → Ctrl + =
-        Dùng '=' thay vì '+' vì trên Windows,
-        phím + thực tế là Shift+=. Ctrl+= hoạt động
-        ổn định hơn trên mọi keyboard layout.
-        """
+        """Zoom In -> Ctrl + ="""
         pyautogui.hotkey('ctrl', '=')
+        print("[ACTION] Zoom In -> Ctrl+=")
 
     def zoom_out(self):
-        """Zoom Out → Ctrl + -"""
+        """Zoom Out -> Ctrl + -"""
         pyautogui.hotkey('ctrl', '-')
+        print("[ACTION] Zoom Out -> Ctrl+-")
 
     def get_screen_size(self):
         return (self.screen_w, self.screen_h)

@@ -342,6 +342,12 @@ def main():
     # Track which mode is active
     is_two_hand_mode = False
 
+    # --- Mode switching hysteresis ---
+    # Tranh nhay mode khi MediaPipe hut tay 1-2 frame
+    two_hand_count = 0      # So frame lien tuc thay 2 tay
+    one_hand_count = 0      # So frame lien tuc thay <= 1 tay
+    current_mode = "INIT"   # "TWO_HAND" / "ONE_HAND" / "INIT"
+
     # FPS
     prev_time = 0
     fps = 0
@@ -376,19 +382,21 @@ def main():
 
             # --- 2 TAY: lay data cho tat ca tay ---
             all_hands = detector.get_all_hands_data(frame)
+            num_hands = len(all_hands)
 
-            # Gan vai tro primary / secondary
+            # ============================================================
+            # HAND ASSIGNMENT (luon gan role bat ke mode)
+            # ============================================================
             primary_hand = None
             secondary_hand = None
 
-            if cfg.ENABLE_TWO_HAND_MODE and len(all_hands) >= 2:
-                # Co 2 tay -> gan theo handedness config
+            if num_hands >= 2:
                 for hd in all_hands:
                     if hd["handedness"] == cfg.PRIMARY_HAND_LABEL:
                         primary_hand = hd
                     elif hd["handedness"] == cfg.SECONDARY_HAND_LABEL:
                         secondary_hand = hd
-                # Fallback neu MediaPipe tra ve 2 tay cung label
+                # Fallback neu 2 tay cung label
                 if primary_hand is None and secondary_hand is None:
                     primary_hand = all_hands[0]
                     secondary_hand = all_hands[1]
@@ -397,27 +405,77 @@ def main():
                 elif secondary_hand is None:
                     secondary_hand = [h for h in all_hands if h != primary_hand][0]
 
-            elif len(all_hands) == 1:
-                # Chi 1 tay -> fallback
+            elif num_hands == 1:
                 hand = all_hands[0]
-                if cfg.ALLOW_ONE_HAND_FALLBACK:
-                    # 1 tay = primary (nhu cu)
+                # Luon gan theo dung handedness — khong cho tay phu thanh primary
+                if hand["handedness"] == cfg.PRIMARY_HAND_LABEL:
                     primary_hand = hand
+                elif hand["handedness"] == cfg.SECONDARY_HAND_LABEL:
+                    secondary_hand = hand
+
+            # ============================================================
+            # HANDEDNESS DEBUG OVERLAY
+            # ============================================================
+            if cfg.SHOW_HANDEDNESS_DEBUG:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                for i, hd in enumerate(all_hands):
+                    raw_label = hd["handedness"]
+                    cx, cy = hd["center"] if hd["center"] else (50, 50)
+                    if primary_hand and hd is primary_hand:
+                        role_tag = "=PRI"
+                        role_clr = cfg.COLOR_PRIMARY_HAND
+                    elif secondary_hand and hd is secondary_hand:
+                        role_tag = "=SEC"
+                        role_clr = cfg.COLOR_SECONDARY_HAND
+                    else:
+                        role_tag = "=???"
+                        role_clr = cfg.COLOR_DANGER
+                    debug_text = f"MP:{raw_label}{role_tag}"
+                    cv2.putText(frame, debug_text, (cx - 50, cy - 40),
+                                font, 0.5, role_clr, 2)
+
+                y_debug = 20
+                cv2.putText(frame, f"PRI=MP:{cfg.PRIMARY_HAND_LABEL}(R hand)  SEC=MP:{cfg.SECONDARY_HAND_LABEL}(L hand)",
+                            (cfg.CAMERA_WIDTH - 400, y_debug),
+                            font, 0.35, (0, 255, 255), 1)
+
+            # ============================================================
+            # MODE SWITCHING HYSTERESIS
+            # ============================================================
+            if cfg.ENABLE_TWO_HAND_MODE:
+                if num_hands >= 2 and primary_hand and secondary_hand:
+                    two_hand_count += 1
+                    one_hand_count = 0
                 else:
-                    # Gan theo dung handedness
-                    if hand["handedness"] == cfg.PRIMARY_HAND_LABEL:
-                        primary_hand = hand
-                    elif hand["handedness"] == cfg.SECONDARY_HAND_LABEL:
-                        secondary_hand = hand
+                    one_hand_count += 1
+                    two_hand_count = 0
+
+                # Quyet dinh mode
+                prev_mode = current_mode
+                if current_mode != "TWO_HAND":
+                    # Muon vao 2-hand mode -> phai du N frame lien tuc
+                    if two_hand_count >= cfg.MODE_ENTER_TWO_HAND_FRAMES:
+                        current_mode = "TWO_HAND"
+                        is_two_hand_mode = True
+                        if prev_mode != "TWO_HAND":
+                            print(f"[MODE] Switched to TWO-HAND MODE")
+                else:
+                    # Dang o 2-hand mode -> chi roi ve fallback khi mat tay M frame lien tuc
+                    if one_hand_count >= cfg.MODE_EXIT_TWO_HAND_FRAMES:
+                        current_mode = "ONE_HAND"
+                        is_two_hand_mode = False
+                        print(f"[MODE] Switched to ONE-HAND FALLBACK MODE")
+            else:
+                current_mode = "ONE_HAND"
+                is_two_hand_mode = False
 
             # --- Xu ly gesture ---
             gesture_result = None
             current_gesture = GESTURE_NONE
             system_active = False
 
-            if cfg.ENABLE_TWO_HAND_MODE and len(all_hands) >= 2 and primary_hand and secondary_hand:
+            if is_two_hand_mode and primary_hand and secondary_hand:
                 # ====== 2-HAND MODE ======
-                is_two_hand_mode = True
 
                 coord_result = coordinator.process(primary_hand, secondary_hand)
                 primary_result = coord_result["primary_result"]
@@ -439,6 +497,7 @@ def main():
                 # Chi dispatch cac gesture co action that, khong dispatch toggle/open_palm
                 if system_active and sec_g in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
                                                 GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                    print(f"[DISPATCH] Secondary: {sec_g}")
                     sec_action = {
                         "gesture": sec_g,
                         "cursor_pos": None,
@@ -448,6 +507,9 @@ def main():
                         "click_freeze_until": 0,
                     }
                     controller.process_gesture(sec_action)
+                elif not system_active and sec_g in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+                                                      GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                    print(f"[DISPATCH] BLOCKED (system OFF): {sec_g}")
 
                 # Event gestures uu tien hien thi
                 if sec_g in EVENT_GESTURES or sec_g in (GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT,
@@ -479,41 +541,167 @@ def main():
                         coordinator.primary_recognizer
                     )
 
-            elif len(all_hands) >= 1:
-                # ====== FALLBACK 1-HAND MODE ======
-                is_two_hand_mode = False
-                active_hand = primary_hand if primary_hand else (secondary_hand if secondary_hand else all_hands[0])
+            elif is_two_hand_mode and num_hands >= 1 and not (primary_hand and secondary_hand):
+                # ====== 2-HAND MODE nhung tam hut 1 tay (hysteresis giu mode) ======
+                system_active = coordinator.system_active
 
-                detector.landmark_list = active_hand["landmarks"]
+                if primary_hand:
+                    # Tay chinh con -> van dieu khien cursor
+                    detector.landmark_list = primary_hand["landmarks"]
+                    primary_result = coordinator.primary_recognizer.recognize(
+                        primary_hand["landmarks"],
+                        primary_hand["fingers"],
+                        primary_hand["palm_size"]
+                    )
+                    if system_active:
+                        controller.process_gesture(primary_result)
+                    current_gesture = primary_result.get("gesture", GESTURE_NONE)
+                    detector.draw_custom_landmarks(frame)
+                    draw_gesture_feedback(
+                        frame, current_gesture,
+                        primary_hand["landmarks"],
+                        coordinator.primary_recognizer
+                    )
 
-                gesture_result = fallback_recognizer.recognize(
-                    active_hand["landmarks"],
-                    active_hand["fingers"],
-                    active_hand["palm_size"],
-                    active_hand["center"]
-                )
+                elif secondary_hand:
+                    # Tay phu con -> Toggle + Swipe + Zoom, KHONG cho cursor/click/drag/scroll
+                    detector.landmark_list = secondary_hand["landmarks"]
+                    sec_result = coordinator.secondary_recognizer.recognize(
+                        secondary_hand["landmarks"],
+                        secondary_hand["fingers"],
+                        secondary_hand["palm_size"],
+                        secondary_hand["center"]
+                    )
+                    system_active = coordinator.system_active
+                    sec_gesture = sec_result.get("gesture", GESTURE_NONE)
 
-                current_gesture = gesture_result["gesture"]
-                system_active = gesture_result["system_active"]
+                    # Dispatch swipe/zoom action that
+                    if system_active and sec_gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+                                                          GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                        print(f"[DISPATCH] Secondary (grace): {sec_gesture}")
+                        sec_action = {
+                            "gesture": sec_gesture,
+                            "cursor_pos": None,
+                            "scroll_delta": None,
+                            "drag_pos": None,
+                            "click_anchor": None,
+                            "click_freeze_until": 0,
+                        }
+                        controller.process_gesture(sec_action)
 
-                if system_active:
-                    controller.process_gesture(gesture_result)
+                    current_gesture = sec_gesture if sec_gesture != GESTURE_NONE else GESTURE_NONE
+                    detector.draw_custom_landmarks(frame)
+
                 else:
-                    if controller.is_dragging:
-                        controller.drag_end()
+                    current_gesture = GESTURE_NONE
 
-                detector.draw_custom_landmarks(frame)
-                draw_gesture_feedback(
-                    frame, current_gesture,
-                    active_hand["landmarks"], fallback_recognizer
-                )
+                gesture_result = {
+                    "gesture": current_gesture,
+                    "cursor_pos": None,
+                    "scroll_delta": None,
+                    "drag_pos": None,
+                    "system_active": system_active,
+                    "click_anchor": None,
+                    "click_freeze_until": 0,
+                }
 
-            else:
+            elif not is_two_hand_mode and num_hands >= 1:
+                # ====== FALLBACK 1-HAND MODE (role-aware) ======
+
+                if primary_hand:
+                    # --- TAY PHAI mot minh: Move/Click/Drag/Scroll ---
+                    # Dung PrimaryHandRecognizer (KHONG dung fallback_recognizer vi no co swipe/zoom/toggle)
+                    detector.landmark_list = primary_hand["landmarks"]
+
+                    primary_result = coordinator.primary_recognizer.recognize(
+                        primary_hand["landmarks"],
+                        primary_hand["fingers"],
+                        primary_hand["palm_size"]
+                    )
+
+                    system_active = coordinator.system_active
+                    current_gesture = primary_result.get("gesture", GESTURE_NONE)
+
+                    if system_active:
+                        controller.process_gesture(primary_result)
+                    else:
+                        if controller.is_dragging:
+                            controller.drag_end()
+
+                    gesture_result = {
+                        "gesture": current_gesture,
+                        "cursor_pos": primary_result.get("cursor_pos"),
+                        "scroll_delta": primary_result.get("scroll_delta"),
+                        "drag_pos": primary_result.get("drag_pos"),
+                        "system_active": system_active,
+                        "click_anchor": primary_result.get("click_anchor"),
+                        "click_freeze_until": primary_result.get("click_freeze_until", 0),
+                    }
+
+                    detector.draw_custom_landmarks(frame)
+                    draw_gesture_feedback(
+                        frame, current_gesture,
+                        primary_hand["landmarks"], coordinator.primary_recognizer
+                    )
+
+                elif secondary_hand:
+                    # --- TAY PHU mot minh: Toggle + Swipe + Zoom, KHONG dieu khien chuot ---
+                    detector.landmark_list = secondary_hand["landmarks"]
+
+                    sec_result = coordinator.secondary_recognizer.recognize(
+                        secondary_hand["landmarks"],
+                        secondary_hand["fingers"],
+                        secondary_hand["palm_size"],
+                        secondary_hand["center"]
+                    )
+                    system_active = coordinator.system_active
+                    sec_gesture = sec_result.get("gesture", GESTURE_NONE)
+
+                    # Dispatch swipe/zoom action that
+                    if system_active and sec_gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
+                                                          GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
+                        print(f"[DISPATCH] Secondary (fallback): {sec_gesture}")
+                        sec_action = {
+                            "gesture": sec_gesture,
+                            "cursor_pos": None,
+                            "scroll_delta": None,
+                            "drag_pos": None,
+                            "click_anchor": None,
+                            "click_freeze_until": 0,
+                        }
+                        controller.process_gesture(sec_action)
+
+                    current_gesture = sec_gesture if sec_gesture != GESTURE_NONE else GESTURE_NONE
+
+                    gesture_result = {
+                        "gesture": current_gesture,
+                        "cursor_pos": None,
+                        "scroll_delta": None,
+                        "drag_pos": None,
+                        "system_active": system_active,
+                        "click_anchor": None,
+                        "click_freeze_until": 0,
+                    }
+
+                    detector.draw_custom_landmarks(frame)
+                else:
+                    current_gesture = GESTURE_NONE
+                    system_active = coordinator.system_active if is_two_hand_mode else fallback_recognizer.system_active
+                    gesture_result = {
+                        "gesture": GESTURE_NONE,
+                        "cursor_pos": None,
+                        "scroll_delta": None,
+                        "drag_pos": None,
+                        "system_active": system_active,
+                        "click_anchor": None,
+                        "click_freeze_until": 0,
+                    }
+
+            elif num_hands == 0:
                 # ====== KHONG CO TAY ======
-                is_two_hand_mode = False
                 gesture_result = fallback_recognizer.recognize([], [], 0, None)
                 current_gesture = GESTURE_NONE
-                system_active = fallback_recognizer.system_active
+                system_active = fallback_recognizer.system_active if not is_two_hand_mode else coordinator.system_active
                 if controller.is_dragging:
                     controller.drag_end()
 
@@ -542,12 +730,22 @@ def main():
                     sec_label, cfg.COLOR_SECONDARY_HAND
                 )
 
-            # Fallback mode indicator
-            if not is_two_hand_mode and len(all_hands) == 1:
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                cv2.putText(frame, "ONE-HAND FALLBACK MODE",
-                            (cfg.CAMERA_WIDTH - 280, cfg.CAMERA_HEIGHT - 10),
-                            font, 0.5, cfg.COLOR_SECONDARY, 1)
+            # --- MODE DISPLAY (hien thi ro rang mode hien tai) ---
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            if current_mode == "TWO_HAND":
+                mode_text = "TWO-HAND MODE ACTIVE"
+                mode_color = cfg.COLOR_SUCCESS
+            elif current_mode == "ONE_HAND":
+                mode_text = "ONE-HAND FALLBACK MODE"
+                mode_color = cfg.COLOR_SECONDARY
+            else:
+                mode_text = f"DETECTING... ({two_hand_count}/{cfg.MODE_ENTER_TWO_HAND_FRAMES})"
+                mode_color = cfg.COLOR_ROI_BORDER
+            text_size = cv2.getTextSize(mode_text, font, 0.55, 2)[0]
+            text_x = (cfg.CAMERA_WIDTH - text_size[0]) // 2
+            cv2.putText(frame, mode_text,
+                        (text_x, cfg.CAMERA_HEIGHT - 10),
+                        font, 0.55, mode_color, 2)
 
             # --- Cap nhat linger ---
             if current_gesture in EVENT_GESTURES:
