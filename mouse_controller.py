@@ -215,40 +215,120 @@ class MouseController:
         """Cuộn trang."""
         pyautogui.scroll(int(amount))
 
+    def get_active_window_title(self):
+        """
+        Lay title cua cua so dang active tren Windows.
+        Dung ctypes (built-in), khong can cai them gi.
+        Tra ve chuoi lowercase de so sanh keyword de hon.
+        """
+        import ctypes
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return ""
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            return buf.value.lower()
+        except Exception:
+            return ""
+
+    def detect_swipe_context(self, window_title):
+        """
+        Xac dinh context tu window title.
+
+        Thu tu uu tien: slide > pdf > image > browser > default
+        Ly do: Google Slides chay trong Chrome, nen 'slide' phai
+        duoc check truoc 'browser'.
+
+        Args:
+            window_title: Title cua cua so active (da lowercase)
+
+        Returns:
+            str: "slide" | "pdf" | "image" | "browser" | "default"
+        """
+        # 1. Slide (uu tien cao nhat)
+        for kw in cfg.SWIPE_SLIDE_KEYWORDS:
+            if kw in window_title:
+                return "slide"
+
+        # 2. PDF
+        for kw in cfg.SWIPE_PDF_KEYWORDS:
+            if kw in window_title:
+                return "pdf"
+
+        # 3. Image
+        for kw in cfg.SWIPE_IMAGE_KEYWORDS:
+            if kw in window_title:
+                return "image"
+
+        # 4. Browser
+        for kw in cfg.SWIPE_BROWSER_KEYWORDS:
+            if kw in window_title:
+                return "browser"
+
+        # 5. Default
+        return "default"
+
+    def _resolve_swipe_mode(self):
+        """
+        Xac dinh swipe mode hien tai.
+        Neu cfg.SWIPE_MODE = "auto" -> detect tu active window.
+        Neu khac -> dung gia tri config truc tiep (manual override).
+
+        Returns:
+            (str, str): (mode, window_title_or_empty)
+        """
+        if cfg.SWIPE_MODE == "auto":
+            title = self.get_active_window_title()
+            context = self.detect_swipe_context(title)
+            return context, title
+        else:
+            return cfg.SWIPE_MODE, ""
+
     def swipe_action(self, gesture_name):
         """
-        Hanh dong swipe — dieu khien trinh chieu / trinh duyet.
+        Context-Aware Swipe — tu dong chon phim theo ung dung dang active.
 
         Mapping:
-          Vuot trai  = Noi dung ke tiep
-          Vuot phai  = Noi dung truoc
+          Swipe Left  = Noi dung ke tiep (next)
+          Swipe Right = Noi dung truoc do (prev)
 
-        Config cfg.SWIPE_MODE:
-          "arrow"   -> press('right'/'left')     (PowerPoint, Google Slides)
-          "page"    -> press('pagedown'/'pageup') (PDF viewer)
-          "browser" -> hotkey('alt','right'/'left') (trinh duyet web)
+        Context:
+          slide   -> right/left        (PowerPoint, Google Slides)
+          pdf     -> pagedown/pageup   (PDF viewer)
+          browser -> Alt+right/left    (trinh duyet web)
+          image   -> right/left        (trinh xem anh)
+          default -> right/left        (mac dinh)
         """
-        mode = cfg.SWIPE_MODE
+        mode, title = self._resolve_swipe_mode()
 
+        if title:
+            print(f"[SWIPE] Active window: {title}")
+        print(f"[SWIPE] Context: {mode}")
+
+        # --- Map gesture + context -> action ---
         if gesture_name == "Swipe Left":
-            if mode == "page":
+            if mode == "pdf":
                 pyautogui.press('pagedown')
                 print("[ACTION] Swipe Left -> press('pagedown')")
             elif mode == "browser":
                 pyautogui.hotkey('alt', 'right')
                 print("[ACTION] Swipe Left -> hotkey('alt','right')")
             else:
+                # slide / image / default -> right arrow
                 pyautogui.press('right')
                 print("[ACTION] Swipe Left -> press('right')")
 
         elif gesture_name == "Swipe Right":
-            if mode == "page":
+            if mode == "pdf":
                 pyautogui.press('pageup')
                 print("[ACTION] Swipe Right -> press('pageup')")
             elif mode == "browser":
                 pyautogui.hotkey('alt', 'left')
                 print("[ACTION] Swipe Right -> hotkey('alt','left')")
             else:
+                # slide / image / default -> left arrow
                 pyautogui.press('left')
                 print("[ACTION] Swipe Right -> press('left')")
 

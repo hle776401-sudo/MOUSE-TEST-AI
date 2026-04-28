@@ -77,10 +77,21 @@ SWIPE_THRESHOLD_X = 80              # Di chuyển ngang tối thiểu để trig
 SWIPE_TIME_WINDOW = 0.5             # Thời gian tối đa cho 1 lần swipe (giây)
 SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
 SWIPE_STABLE_FRAMES = 2             # Số frame liên tục thỏa điều kiện mới bắt đầu tracking
-SWIPE_MODE = "browser"              # Chon che do swipe:
-                                    #   "arrow"   = right/left (PowerPoint, Google Slides)
-                                    #   "page"    = pagedown/pageup (PDF viewer)
-                                    #   "browser" = Alt+Left / Alt+Right (trinh duyet web)
+SWIPE_MODE = "auto"                 # Chon che do swipe:
+                                    #   "auto"    = tu dong detect theo cua so dang active
+                                    #   "slide"   = ep che do slide (PowerPoint, Slides)
+                                    #   "pdf"     = ep che do PDF viewer
+                                    #   "browser" = ep che do trinh duyet web
+                                    #   "image"   = ep che do xem anh
+
+# --- Context-Aware Swipe: keyword detect (chi dung khi SWIPE_MODE = "auto") ---
+# Thu tu uu tien: slide > pdf > image > browser > default
+# (Google Slides chay trong Chrome nen slide phai uu tien hon browser)
+SWIPE_SLIDE_KEYWORDS   = ["powerpoint", "google slides", ".pptx", ".ppt", "slide"]
+SWIPE_PDF_KEYWORDS     = [".pdf", "acrobat", "pdf viewer", "foxit", "sumatra"]
+SWIPE_IMAGE_KEYWORDS   = ["photos", "image viewer", "photo viewer",
+                          ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"]
+SWIPE_BROWSER_KEYWORDS = ["chrome", "edge", "firefox", "opera", "brave", "vivaldi"]
 
 # --- System Toggle (Bật/Tắt hệ thống) ---
 SYSTEM_TOGGLE_FINGERS = 5           # Số ngón tay giơ lên để kích hoạt toggle
@@ -206,7 +217,9 @@ SYSTEM_ACTIVE_DEFAULT = False       # Hệ thống mặc định TẮT khi khở
 # ==============================================================================
 # 9. VOICE INPUT (nhập liệu bằng giọng nói)
 # ==============================================================================
-# Flow: nhấn hotkey → mic nghe → STT → gõ text vào ô đang focus
+# 2 chế độ voice riêng biệt:
+#   Voice Search Mode: nghe → gõ → auto Enter (dùng cho Google Search, YouTube...)
+#   Voice Text Mode:   nghe → gõ → dừng       (dùng cho chat, comment, form...)
 #
 # State flow:
 #   VOICE_IDLE → VOICE_LISTENING → VOICE_RECOGNIZING → VOICE_TYPING → VOICE_DONE
@@ -214,15 +227,18 @@ SYSTEM_ACTIVE_DEFAULT = False       # Hệ thống mặc định TẮT khi khở
 #                VOICE_ERROR          VOICE_ERROR
 #
 ENABLE_VOICE_INPUT = True           # Bật/tắt chức năng voice input
-VOICE_HOTKEY = "ctrl+shift+v"       # Global hotkey bat voice (khong can focus cua so webcam)
-                                    # Nguoi dung click vao o nhap tren browser, giu focus o do
-                                    # roi nhan Ctrl+Shift+V -> browser van co focus -> paste dung cho
+
+# --- Hotkey cho 2 chế độ (global, không cần focus cửa sổ webcam) ---
+VOICE_HOTKEY = "ctrl+alt+v"         # Global hotkey bat voice (V = Voice, khong trung voi app nao)
+VOICE_AUTO_ENTER = False            # True = tu nhan Enter sau khi go xong text
+
+# --- Cấu hình STT chung (dùng cho cả 2 mode) ---
 VOICE_LANGUAGE = "vi-VN"            # Ngôn ngữ nhận diện giọng nói (vi-VN / en-US / ja-JP ...)
 VOICE_LISTEN_TIMEOUT = 5            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
                                     # Nếu im lặng quá lâu → VOICE_ERROR
-VOICE_PHRASE_TIME_LIMIT = 10        # Thời gian tối đa cho 1 câu nói (giây)
+VOICE_PHRASE_TIME_LIMIT = 30        # Thời gian tối đa cho 1 câu nói (giây)
                                     # Sau thời gian này tự cắt và gửi STT
-VOICE_AUTO_ENTER = False            # True = tự nhấn Enter sau khi gõ xong text
-VOICE_TYPING_SPEED = 0.02          # Delay giữa mỗi ký tự khi gõ (giây), 0 = gõ tức thời
+VOICE_TYPING_SPEED = 0.02          # Delay trước khi paste (giây)
 VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
 COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)
+

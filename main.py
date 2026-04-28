@@ -351,7 +351,6 @@ def main():
         voice_state = VoiceState.IDLE   # State hien thi tren UI
         voice_result_text = ""          # Text nhan duoc gan nhat
 
-        # --- Dang ky global hotkey (khong can focus cua so webcam) ---
         def _on_voice_hotkey():
             """Callback khi nguoi dung nhan global hotkey."""
             nonlocal voice_thread, voice_state, voice_result_text
@@ -371,7 +370,9 @@ def main():
                     voice_state = VoiceState.TYPING
                     controller.type_text(result["text"])
                     if cfg.VOICE_AUTO_ENTER:
+                        time.sleep(0.5)
                         controller.press_enter()
+                        print("[VOICE] Auto Enter")
                     voice_state = VoiceState.DONE
                 else:
                     voice_result_text = ""
@@ -845,9 +846,8 @@ def main():
             if cfg.ENABLE_VOICE_INPUT and cfg.VOICE_STATUS_DISPLAY:
                 is_busy = (voice_thread is not None and voice_thread.is_alive())
                 if is_busy or voice_state not in (VoiceState.IDLE, VoiceState.DONE, VoiceState.ERROR):
-                    # Chon text + mau theo state
                     if voice_state == VoiceState.LISTENING:
-                        v_text = f"[MIC] LISTENING... (say something)"
+                        v_text = "[MIC] LISTENING..."
                         v_color = cfg.COLOR_VOICE
                     elif voice_state == VoiceState.RECOGNIZING:
                         v_text = "[MIC] RECOGNIZING..."
@@ -862,7 +862,7 @@ def main():
                                 (10, cfg.CAMERA_HEIGHT - 45),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, v_color, 2)
                 elif voice_state == VoiceState.ERROR:
-                    cv2.putText(frame, f"[MIC] Error (press {cfg.VOICE_HOTKEY.upper()} to retry)",
+                    cv2.putText(frame, f"[MIC] Error ({cfg.VOICE_HOTKEY.upper()} to retry)",
                                 (10, cfg.CAMERA_HEIGHT - 45),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.COLOR_DANGER, 1)
                 elif voice_state == VoiceState.DONE and voice_result_text:
