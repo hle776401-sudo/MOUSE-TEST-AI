@@ -60,7 +60,7 @@ COLOR_SECONDARY_HAND = (255, 165, 0) # Cam - Secondary hand bbox
 # --- Pinch (Dùng chung cho Click + Drag) ---
 CLICK_DISTANCE_THRESHOLD = 40       # Fallback pixel khi không có palm_size (pixels)
 CLICK_COOLDOWN = 0.2                # Cooldown giữa các lần click (giây)
-PINCH_HOLD_THRESHOLD = 0.30         # Giữ pinch > 300ms = drag, < 300ms = click (giây)
+PINCH_HOLD_THRESHOLD = 0.60         # Giữ pinch > 600ms = drag, < 600ms = click (giây)
 PINCH_THRESHOLD_NORMALIZED = 0.28   # Ngưỡng pinch ENTER (~28% kích thước tay)
 PINCH_EXIT_MULTIPLIER = 1.3         # Hysteresis: exit = enter * 1.3 (tránh flickering ở biên)
 
@@ -102,9 +102,9 @@ OPEN_PALM_GRACE_PERIOD = 0.4        # Grace period: 5 ngón phải giữ yên 0.
 
 # --- Stability (Ổn định gesture) ---
 POST_ACTION_COOLDOWN = 0.15         # Neutral gap sau event gestures (click, swipe) (giây)
-CLICK_FREEZE_TIME = 0.10            # Freeze cursor sau click/right click (giây)
+CLICK_FREEZE_TIME = 0.20            # Freeze cursor sau click/right click (giây)
                                     # Chống rung: cursor không move trong khoảng này
-MOVE_DEADZONE = 3                   # Deadzone di chuyển chuột (pixels trên màn hình)
+MOVE_DEADZONE = 5                   # Deadzone di chuyển chuột (pixels trên màn hình)
                                     # Nếu target gần current hơn deadzone → không move
                                     # Giảm rung khi tay đứng yên
 
