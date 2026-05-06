@@ -242,3 +242,80 @@ VOICE_TYPING_SPEED = 0.02          # Delay trước khi paste (giây)
 VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
 COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)
 
+
+# ==============================================================================
+# 10. CONTEXT-AWARE GESTURES
+# ==============================================================================
+# Phat hien cua so dang active de map gesture vao hanh dong phu hop theo context.
+# Vi du: swipe = next/prev slide (presentation), play/pause (media), v.v.
+#
+# Context chuan:
+#   browser      = trinh duyet web (Chrome, Edge, Firefox, Brave, Opera, Coc Coc)
+#   presentation = trinh chieu (PowerPoint, Google Slides)
+#   document     = van ban/PDF (Word, PDF viewer, Notepad, Google Docs...)
+#   media        = nhac/video (Spotify, VLC, Windows Media Player...)
+#   default      = mac dinh (khong khop context nao)
+#
+# Luu y:
+#   - YouTube trong Chrome CHUA dua vao media o dot 1.
+#   - Excel/Spreadsheet CHUA lam o dot 1.
+#   - Thu tu uu tien detect: presentation > document > media > browser > default.
+# ==============================================================================
+
+ENABLE_CONTEXT_AWARE   = True   # Bat/tat toan bo co che Context-Aware Gestures
+CONTEXT_CACHE_INTERVAL = 0.5    # Chu ky cap nhat context (giay) - lay ten cua so active
+CONTEXT_MODE           = "auto" # Che do context:
+                                #   "auto" = tu dong detect theo cua so dang active
+                                #   (cac gia tri khac se mo rong o dot sau)
+SHOW_CONTEXT_HUD       = True   # Hien thi context hien tai tren UI overlay (HUD)
+
+# --- Keyword groups de detect context theo ten cua so (title / process name) ---
+# So sanh case-insensitive, kiem tra xem keyword co xuat hien trong tieu de cua so khong.
+
+CONTEXT_BROWSER_KEYWORDS = [
+    "chrome",
+    "edge",
+    "firefox",
+    "brave",
+    "opera",
+    "cốc cốc",
+    "coc coc",
+]
+
+CONTEXT_PRESENTATION_KEYWORDS = [
+    "powerpoint",
+    "slide show",
+    "google slides",
+    "presentation",
+    ".pptx",                    # WPS Office / bất kỳ app mở file .pptx
+    ".ppt",                     # File .ppt cũ
+    "wps presentation",         # WPS Office - chế độ Presentation
+    "kingsoft presentation",    # Tên cũ của WPS Presentation
+]
+
+CONTEXT_DOCUMENT_KEYWORDS = [
+    "word",
+    "pdf",
+    "adobe",
+    "acrobat",
+    "foxit",
+    "sumatra",
+    "notepad",
+    "notepad++",
+    "google docs",
+    "libreoffice writer",
+    "wordpad",
+]
+
+CONTEXT_MEDIA_KEYWORDS = [
+    "spotify",
+    "vlc",
+    "windows media player",
+    "groove music",
+    "musicbee",
+    "foobar",
+    "itunes",
+    "media player",                     # Generic: Windows Media Player rut gon
+    "trình phát đa phương tiện",        # Windows Media Player - tieng Viet (Unicode)
+    "trinh phat da phuong tien",        # Windows Media Player - tieng Viet (khong dau)
+]
