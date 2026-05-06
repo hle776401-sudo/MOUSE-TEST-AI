@@ -8,6 +8,7 @@ Trách nhiệm duy nhất:
   - Quản lý smoothing tọa độ chuột (tránh jitter)
   - Mapping tọa độ camera → màn hình
   - Không chứa logic nhận diện gesture
+  - Execute action_name từ ActionRouter (Context-Aware Gestures)
 
 Actions:
   - move_cursor(): Di chuyển con trỏ chuột
@@ -16,8 +17,9 @@ Actions:
   - right_click(): Click chuột phải
   - drag_start() / drag_move() / drag_end(): Kéo-thả
   - scroll(): Cuộn trang
-  - swipe_action(): Chuyển slide trình chiếu (Right/Left arrow)
-  - zoom_in() / zoom_out(): Zoom (Ctrl+= / Ctrl+-)
+  - swipe_action(): Swipe (context-aware nếu có ActionRouter)
+  - zoom_in() / zoom_out(): Zoom (context-aware nếu có ActionRouter)
+  - execute_action(): Thực thi action_name từ ActionRouter
 """
 
 import pyautogui
@@ -39,13 +41,19 @@ class MouseController:
         is_dragging: Trạng thái đang kéo-thả
     """
 
-    def __init__(self, smoothing_factor=cfg.SMOOTHING_FACTOR):
+    def __init__(self, smoothing_factor=cfg.SMOOTHING_FACTOR, action_router=None):
         self.screen_w, self.screen_h = pyautogui.size()
         self.smoothing_factor = smoothing_factor
         self.prev_x = self.screen_w // 2
         self.prev_y = self.screen_h // 2
         self.is_dragging = False
-        self._click_freeze_until = 0   # Freeze cursor until this timestamp
+        self._click_freeze_until = 0    # Freeze cursor until this timestamp
+
+        # --- Context-Aware Gestures (optional) ---
+        self.action_router = action_router          # ActionRouter instance hoac None
+        self.last_routed_action: str = "no_action"  # Action name tu lan route gan nhat
+        self.last_routed_context: str = "default"   # Context tu lan route gan nhat
+        self._action_warning_printed: set = set()   # Tranh spam warning cung 1 action
 
     def process_gesture(self, gesture_result):
         """
@@ -215,6 +223,82 @@ class MouseController:
         """Cuộn trang."""
         pyautogui.scroll(int(amount))
 
+    # ------------------------------------------------------------------
+    # Context-Aware Action Executor
+    # ------------------------------------------------------------------
+
+    def execute_action(self, action_name: str) -> bool:
+        """Thuc thi action_name bang pyautogui.
+
+        Duoc goi boi swipe_action() va zoom_in()/zoom_out() khi co ActionRouter.
+        Khong goi truc tiep tu process_gesture().
+
+        Args:
+            action_name: Ten action tu ActionRouter.resolve().
+
+        Returns:
+            True neu da thuc thi action, False neu no_action hoac khong hop le.
+        """
+        try:
+            if action_name == "no_action":
+                return False
+
+            # --- Browser ---
+            elif action_name == "browser_back":
+                pyautogui.hotkey("alt", "left")
+            elif action_name == "browser_forward":
+                pyautogui.hotkey("alt", "right")
+
+            # --- Presentation ---
+            elif action_name == "next_slide":
+                pyautogui.press("right")
+            elif action_name == "previous_slide":
+                pyautogui.press("left")
+
+            # --- Document ---
+            elif action_name == "page_down":
+                pyautogui.press("pagedown")
+            elif action_name == "page_up":
+                pyautogui.press("pageup")
+
+            # --- Zoom (browser / presentation / document) ---
+            elif action_name in ("browser_zoom_in", "presentation_zoom_in", "document_zoom_in", "default_zoom_in"):
+                pyautogui.hotkey("ctrl", "=")
+            elif action_name in ("browser_zoom_out", "presentation_zoom_out", "document_zoom_out", "default_zoom_out"):
+                pyautogui.hotkey("ctrl", "-")
+
+            # --- Media (volume / track) ---
+            elif action_name == "volume_up":
+                pyautogui.press("volumeup")
+            elif action_name == "volume_down":
+                pyautogui.press("volumedown")
+            elif action_name == "next_track":
+                pyautogui.press("nexttrack")
+            elif action_name == "previous_track":
+                pyautogui.press("prevtrack")
+
+            # --- Default swipe (fallback giong hanh vi cu) ---
+            elif action_name == "default_swipe_left":
+                pyautogui.press("right")
+            elif action_name == "default_swipe_right":
+                pyautogui.press("left")
+
+            else:
+                # action_name chua duoc map -> bo qua, khong crash
+                return False
+
+            print(f"[ACTION] {action_name}")
+            return True
+
+        except Exception as e:
+            # Media key (nexttrack/prevtrack/volumeup/volumedown) co the loi tren
+            # mot so he thong. Print once per action_name, khong spam.
+            if action_name not in self._action_warning_printed:
+                print(f"[ACTION] Warning: execute_action('{action_name}') failed: {e}")
+                self._action_warning_printed.add(action_name)
+            return False
+
+    # DEPRECATED: kept for backward compatibility — su dung context_manager.py thay the
     def get_active_window_title(self):
         """
         Lay title cua cua so dang active tren Windows.
@@ -233,6 +317,7 @@ class MouseController:
         except Exception:
             return ""
 
+    # DEPRECATED: kept for backward compatibility — su dung context_manager.py thay the
     def detect_swipe_context(self, window_title):
         """
         Xac dinh context tu window title.
@@ -270,6 +355,7 @@ class MouseController:
         # 5. Default
         return "default"
 
+    # DEPRECATED: kept for backward compatibility — su dung action_router.py thay the
     def _resolve_swipe_mode(self):
         """
         Xac dinh swipe mode hien tai.
@@ -290,24 +376,25 @@ class MouseController:
         """
         Context-Aware Swipe — tu dong chon phim theo ung dung dang active.
 
-        Mapping:
-          Swipe Left  = Noi dung ke tiep (next)
-          Swipe Right = Noi dung truoc do (prev)
-
-        Context:
-          slide   -> right/left        (PowerPoint, Google Slides)
-          pdf     -> pagedown/pageup   (PDF viewer)
-          browser -> Alt+right/left    (trinh duyet web)
-          image   -> right/left        (trinh xem anh)
-          default -> right/left        (mac dinh)
+        Neu co ActionRouter va ENABLE_CONTEXT_AWARE = True:
+          gesture_name -> ActionRouter.resolve() -> execute_action()
+        Neu khong:
+          Giu logic cu (SWIPE_MODE / detect_swipe_context).
         """
-        mode, title = self._resolve_swipe_mode()
+        # --- Context-Aware path (ActionRouter) ---
+        if cfg.ENABLE_CONTEXT_AWARE and self.action_router is not None:
+            action_name = self.action_router.resolve(gesture_name)
+            self.last_routed_action = action_name
+            self.last_routed_context = self.action_router.get_last_context()
+            print(f"[SWIPE] context={self.last_routed_context} -> {action_name}")
+            return self.execute_action(action_name)
 
+        # --- Legacy path (fallback) ---
+        mode, title = self._resolve_swipe_mode()
         if title:
             print(f"[SWIPE] Active window: {title}")
         print(f"[SWIPE] Context: {mode}")
 
-        # --- Map gesture + context -> action ---
         if gesture_name == "Swipe Left":
             if mode == "pdf":
                 pyautogui.press('pagedown')
@@ -316,7 +403,6 @@ class MouseController:
                 pyautogui.hotkey('alt', 'right')
                 print("[ACTION] Swipe Left -> hotkey('alt','right')")
             else:
-                # slide / image / default -> right arrow
                 pyautogui.press('right')
                 print("[ACTION] Swipe Left -> press('right')")
 
@@ -328,17 +414,30 @@ class MouseController:
                 pyautogui.hotkey('alt', 'left')
                 print("[ACTION] Swipe Right -> hotkey('alt','left')")
             else:
-                # slide / image / default -> left arrow
                 pyautogui.press('left')
                 print("[ACTION] Swipe Right -> press('left')")
 
     def zoom_in(self):
-        """Zoom In -> Ctrl + ="""
+        """Zoom In — context-aware neu co ActionRouter, fallback Ctrl+=."""
+        if cfg.ENABLE_CONTEXT_AWARE and self.action_router is not None:
+            action_name = self.action_router.resolve("zoom_in")
+            self.last_routed_action = action_name
+            self.last_routed_context = self.action_router.get_last_context()
+            print(f"[ZOOM] context={self.last_routed_context} -> {action_name}")
+            return self.execute_action(action_name)
+        # Legacy
         pyautogui.hotkey('ctrl', '=')
         print("[ACTION] Zoom In -> Ctrl+=")
 
     def zoom_out(self):
-        """Zoom Out -> Ctrl + -"""
+        """Zoom Out — context-aware neu co ActionRouter, fallback Ctrl+-."""
+        if cfg.ENABLE_CONTEXT_AWARE and self.action_router is not None:
+            action_name = self.action_router.resolve("zoom_out")
+            self.last_routed_action = action_name
+            self.last_routed_context = self.action_router.get_last_context()
+            print(f"[ZOOM] context={self.last_routed_context} -> {action_name}")
+            return self.execute_action(action_name)
+        # Legacy
         pyautogui.hotkey('ctrl', '-')
         print("[ACTION] Zoom Out -> Ctrl+-")
 
