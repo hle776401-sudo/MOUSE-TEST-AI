@@ -133,10 +133,12 @@ MOUSE TEST AI/
 ├── config.py                ← Tất cả hằng số & tham số
 ├── utils.py                 ← Hàm tiện ích (distance, smooth, map)
 ├── hand_tracking.py         ← MediaPipe wrapper
-├── gesture_recognition.py   ← 4 class nhận diện gesture
-├── mouse_controller.py      ← Thực thi PyAutoGUI action
+├── gesture_recognition.py   ← 4 class nhận diện gesture (Swipe V2)
+├── mouse_controller.py      ← Thực thi PyAutoGUI action + execute_action()
+├── context_manager.py       ← [MỚI] Detect active window, classify context
+├── action_router.py         ← [MỚI] Route (gesture, context) → action_name
 ├── voice_input.py           ← Speech-to-Text module
-├── main.py                  ← Vòng lặp chính + UI overlay
+├── main.py                  ← Vòng lặp chính + Context HUD + UI overlay
 ├── test_handedness.py       ← Script test xác nhận tay phải/trái
 └── requirements.txt         ← Dependencies
 ```
@@ -230,21 +232,41 @@ Ngưỡng: |delta_y| ≥ 10px
 Action: pyautogui.scroll(±12)
 ```
 
-### 5.3 Swipe
+### 5.3 Swipe V2 — State Machine
+
+Phase Context-Aware Gestures đã thiết kế lại Swipe bằng **State Machine 4 trạng thái** trong `SecondaryHandRecognizer`:
 
 ```
-Điều kiện đồng thời:
-  ✓ ≥ 4 ngón giơ (thumb có thể cụp)
-  ✓ Di ngang ≥ 80px
-  ✓ Trong < 0.5 giây
-  ✓ 2 frame liên tục thỏa mãn
-  ✓ Không trong cooldown 0.8s
-
-3 chế độ output:
-  "arrow"   → press('right'/'left')       (slide)
-  "page"    → press('pagedown'/'pageup')   (PDF)
-  "browser" → hotkey('alt','right'/'left') (web)
+IDLE ──[pose OK × 3 frame]──► ARMED ──[dx > 15px]──► TRACKING
+  ▲                              │                      │
+  │  pose lost > grace          │ timeout              │ timeout
+  └────────────────────────────────────────────────┘
+                                               │
+                               dx≥60 & vel≥120 & t≥0.12s
+                                               ▼
+                                     COOLDOWN (0.7s) ──► IDLE
+                                     return Swipe Left/Right
 ```
+
+**Pose Swipe V2**: `fingers = [0,1,1,1,1]` (ngón cái cụp, 4 ngón giơ) ≠ Toggle `[1,1,1,1,1]` (5 ngón). Không bao giờ xung đột.
+
+**Diều kiện trigger**:
+```
+elapsed  ≥ 0.12s   (không quá nhanh — loại giật)
+abs(dx)  ≥ 60px    (quãng đường tối thiểu)
+vel_x    ≥ 120px/s (tốc độ tối thiểu)
+elapsed  ≤ 0.9s    (không quá chậm)
+```
+
+**Context-Aware action**: sau khi trigger, `ActionRouter.resolve()` tra bảng:
+
+| Context | Swipe Left ← | Swipe Right → |
+|---|---|---|
+| browser | `Alt+Left` | `Alt+Right` |
+| presentation | `←` (prev slide) | `→` (next slide) |
+| document | `PageUp` | `PageDown` |
+| media | `prevtrack` | `nexttrack` |
+| default | `←` | `→` |
 
 ### 5.4 Zoom
 
@@ -285,7 +307,7 @@ Action: Bật/Tắt toàn bộ hệ thống
 | 2 | PinchState Machine | Click/Drag | Phân biệt click vs drag theo thời gian |
 | 3 | Post-action Cooldown | Mọi event | 0.15s nghỉ sau mỗi gesture event |
 | 4 | Click Freeze | Cursor | 100ms không move sau click — chống rung |
-| 5 | Deadzone | Cursor | 3px — bỏ qua micro-movement |
+| 5 | Deadzone | Cursor | 5px — bỏ qua micro-movement |
 | 6 | Smoothing | Cursor | factor=4, nội suy tuyến tính |
 | 7 | Frame Stability | Zoom/Swipe | N frame liên tục mới bắt đầu tracking |
 | 8 | Delta Accumulator | Zoom | Gom delta nhỏ thành 1 trigger lớn |
@@ -302,7 +324,7 @@ Action: Bật/Tắt toàn bộ hệ thống
 
 ```
 1. User click vào ô tìm kiếm trên browser (giữ focus)
-2. Nhấn Ctrl+Shift+V (global hotkey — không cần focus webcam)
+2. Nhấn Ctrl+Alt+V (global hotkey — không cần focus webcam)
 3. VOICE_LISTENING: Microphone mở, chờ giọng nói (timeout 5s)
 4. VOICE_RECOGNIZING: Gửi audio lên Google Speech-to-Text
 5. VOICE_TYPING: Paste text vào ô đang focus (Windows Clipboard API)
@@ -314,7 +336,7 @@ Action: Bật/Tắt toàn bộ hệ thống
 ```
 VOICE_IDLE
   │
-  ├─[Ctrl+Shift+V]──► VOICE_LISTENING
+  ├─[Ctrl+Alt+V]──► VOICE_LISTENING
   │                        │
   │                   [im lặng > 5s]──► VOICE_ERROR
   │                        │
@@ -339,7 +361,7 @@ VOICE_IDLE
 
 **Vấn đề 2 — Focus bị mất**: Cách cũ dùng `cv2.waitKey()` bắt phím V chỉ khi webcam window focus → user phải click webcam → browser mất focus.
 
-→ **Giải pháp**: `keyboard.add_hotkey("ctrl+shift+v")` — global hotkey ở OS level. User nhấn từ browser, browser giữ focus.
+→ **Giải pháp**: `keyboard.add_hotkey("ctrl+alt+v")` — global hotkey ở OS level. User nhấn từ browser, browser giữ focus.
 
 **Vấn đề 3 — Tkinter steal focus khi paste**: `tkinter.Tk()` tạo window ẩn nhưng vẫn steal focus → `Ctrl+V` paste vào tkinter thay vì browser.
 
@@ -368,11 +390,11 @@ Text "thời tiết" → encode UTF-16-LE → copy vào clipboard → Ctrl+V pas
 | Pinch | PINCH_HOLD_THRESHOLD | 0.30s | Click < 300ms, Drag ≥ 300ms |
 | Scroll | SCROLL_SPEED | 12 | Đơn vị scroll mỗi frame |
 | Swipe | SWIPE_THRESHOLD_X | 80px | Di ngang tối thiểu |
-| Swipe | SWIPE_MODE | "browser" | Chế độ swipe hiện tại |
+| Swipe | SWIPE_MODE | "auto" | Tự động route theo context; override: slide/pdf/browser/image |
 | Zoom | ZOOM_DELTA_THRESHOLD | 20px | Accumulator trigger |
 | Toggle | SYSTEM_TOGGLE_HOLD_TIME | 3.0s | Giữ 5 ngón bao lâu |
 | Smoothing | SMOOTHING_FACTOR | 4 | Hệ số làm mượt cursor |
-| Voice | VOICE_HOTKEY | "ctrl+shift+v" | Global hotkey |
+| Voice | VOICE_HOTKEY | "ctrl+alt+v" | Global hotkey |
 | Voice | VOICE_LANGUAGE | "vi-VN" | Ngôn ngữ STT |
 
 ---
@@ -392,26 +414,38 @@ gesture_recognition.py
 │
 ├── SecondaryHandRecognizer      ← Tay trái
 │     recognize(landmarks, fingers, palm_size, center)
-│     → Toggle, Swipe, Zoom
+│     → Toggle, Swipe V2, Zoom
+│     _check_swipe()              ← Swipe V2 State Machine
+│     _check_swipe_legacy()       ← Fallback khi ENABLE_SWIPE_V2=False
+│     get_swipe_debug_info()      ← {state, dx, vel, elapsed, ...}
 │
 └── GestureCoordinator           ← Điều phối
       process(primary_hand, secondary_hand)
       → {primary_result, secondary_result, system_active}
 
-hand_tracking.py
-└── HandDetector
-      get_all_hands_data(frame)
-      → [{handedness, landmarks, fingers, palm_size, center, bbox}]
+context_manager.py  [MỚI]
+└── ContextManager
+      update()                    ← gọi mỗi frame (có cache 0.5s)
+      get_current_context()       ← browser/presentation/document/media/default
+      classify_window(title)      ← keyword matching, priority order
+      get_context_display()       ← "CTX: Browser"
+      Sticky mechanism: giữ context cũ 2s khi tạm về default
+
+action_router.py  [MỚI]
+└── ActionRouter(context_manager)
+      resolve(gesture_name)       ← action_name (ví dụ: "next_slide")
+      ACTION_TABLE: (gesture, context) → action_name
 
 mouse_controller.py
-└── MouseController
+└── MouseController(action_router=None)
       process_gesture(result_dict)
-      type_text(text)              ← ctypes clipboard
+      execute_action(action_name) ← [MỚI] thực thi bằng pyautogui
+      type_text(text)             ← ctypes clipboard
       press_enter()
 
 voice_input.py
 └── VoiceInputManager
-      listen_and_recognize()       ← Blocking, chạy trong thread
+      listen_and_recognize()      ← Blocking, chạy trong thread
       → {"state", "text", "error"}
 ```
 
@@ -438,4 +472,88 @@ voice_input.py
 
 ---
 
-*Tài liệu phản ánh trạng thái hệ thống tính đến tháng 4/2026.*
+## PHẦN 11: PHASE CONTEXT-AWARE GESTURES + SWIPE V2
+
+### 11.1 Mục tiêu phase
+
+Thêm khả năng **nhận biết ứng dụng đang active** và **tự động điều chỉnh hành vi Swipe/Zoom** mà không cần cấu hình thủ công. Đồng thời cải thiện độ ổn định của Swipe bằng State Machine.
+
+### 11.2 Kiến trúc Context Pipeline
+
+```
+Active Window Title (Windows API qua ctypes)
+    │
+    ▼
+ ContextManager.classify_window(title)
+    │  keyword matching theo priority order:
+    │  presentation > document > media > browser > default
+    │  + sticky 2s (giữ context cũ khi tạm về default)
+    ▼
+  context: "browser" | "presentation" | "document" | "media" | "default"
+    │
+    ▼
+ ActionRouter.resolve(gesture_name, context)
+    │  ACTION_TABLE[(gesture, context)] → action_name
+    │  Ví dụ: ("swipe_left", "presentation") → "previous_slide"
+    ▼
+ MouseController.execute_action(action_name)
+    │  pyautogui.press() / hotkey()
+    │  Anti-spam: warning mỗi action chỉ in 1 lần
+    ▼
+  Hành vi thực tế trên màn hình
+```
+
+### 11.3 Kiến trúc Swipe V2
+
+**Vấn đề cũ**: Swipe V1 dựa trên delta x và time window đơn giản — không có vận tốc, dễ trigger nhầm hoặc bỏ sót.
+
+**Giải pháp**: State Machine 4 trạng thái với kiểm tra đa điều kiện:
+
+| Tham số | Giá trị | Mục đích |
+|---|---|---|
+| `SWIPE_V2_POSE_STABLE_FRAMES` | 3 | Cần 3 frame pose ổn định → ARMED |
+| `SWIPE_V2_MIN_DISTANCE_X` | 60px | Quãng đường ngang tối thiểu |
+| `SWIPE_V2_MIN_VELOCITY_X` | 120px/s | Tốc độ tối thiểu (lọc chầm chạp) |
+| `SWIPE_V2_MIN_TIME` | 0.12s | Loại cử động giật tay |
+| `SWIPE_V2_MAX_TIME` | 0.9s | Timeout tuyến tính |
+| `SWIPE_V2_LOST_GRACE_FRAMES` | 4 | Dung sai mất pose (giữ state) |
+| `SWIPE_V2_COOLDOWN` | 0.7s | Chống re-trigger ngay sau swipe |
+
+**Fallback an toàn**: `ENABLE_SWIPE_V2 = False` → gọi `_check_swipe_legacy()` giữ nguyên hành vi cũ.
+
+### 11.4 Context Sticky Mechanism
+
+**Vấn đề**: Khi camera window đang active (nhìn vào tay), active window là "AI Mouse Controller" → context = default → Swipe bị route sai.
+
+**Giải pháp**: `_last_non_default_time` + `CONTEXT_STICKY_SECONDS = 2.0s`:
+```
+Cử chỉ Swipe trong PowerPoint → để tay hướng vào camera
+  → Active window: "AI Mouse Controller" (default)
+  → Elapsed: 0.3s < 2.0s
+  → ⇒ Vẫn dùng context "presentation" (sticky)
+  → Swipe route đúng: previous_slide / next_slide
+```
+
+### 11.5 Kết quả validation
+
+| Kiểm tra | Kết quả |
+|---|---|
+| App khởing động không crash | ✅ PASS |
+| Context HUD đúng màu (vàng/xanh lá/xanh dương/tím/xám) | ✅ PASS |
+| Browser → CTX: Browser | ✅ PASS |
+| WPS/PowerPoint .pptx → CTX: Presentation | ✅ PASS |
+| PDF viewer → CTX: Document | ✅ PASS |
+| Trình phát Đa phương tiện → CTX: Media | ✅ PASS |
+| Sticky context 2s | ✅ PASS |
+| Swipe Left = back/prev/pageup/prevtrack | ✅ PASS |
+| Swipe Right = forward/next/pagedown/nexttrack | ✅ PASS |
+| Zoom media → volume_up/volume_down | ✅ PASS |
+| Toggle 5 ngón không xung đột Swipe V2 | ✅ PASS |
+| Zoom 2 ngón không xung đột Swipe V2 | ✅ PASS |
+| Move/click/drag/scroll không bị ảnh hưởng | ✅ PASS |
+| Voice Ctrl+Alt+V | ✅ PASS |
+| Gemini Pro High review | ✅ PASS (no critical/high/medium bug) |
+
+---
+
+*Tài liệu phản ánh trạng thái hệ thống tính đến tháng 5/2026.*

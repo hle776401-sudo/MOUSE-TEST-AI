@@ -19,6 +19,7 @@
 11. [Cài đặt & Chạy](#11-cài-đặt--chạy)
 12. [Phím tắt](#12-phím-tắt)
 13. [Sơ đồ class](#13-sơ-đồ-class)
+14. [Changelog Phase](#14-changelog-phase)
 
 ---
 
@@ -55,8 +56,10 @@ MOUSE TEST AI/
 ├── main.py                 Main loop + UI overlay + mode switching
 ├── config.py               Tất cả hằng số và tham số cấu hình
 ├── hand_tracking.py        MediaPipe wrapper — detect & extract hand data
-├── gesture_recognition.py  4 class nhận diện gesture
-├── mouse_controller.py     Thực thi action qua PyAutoGUI
+├── gesture_recognition.py  4 class nhận diện gesture (bao gồm Swipe V2)
+├── mouse_controller.py     Thực thi action qua PyAutoGUI + execute_action()
+├── context_manager.py      Detect active window → classify context [MỚI]
+├── action_router.py        Route (gesture, context) → action_name [MỚI]
 ├── voice_input.py          STT module — mic → audio → text
 ├── utils.py                Hàm tiện ích (distance, smooth, map, cooldown)
 ├── test_handedness.py      Script test xác nhận mapping tay phải/trái
@@ -70,9 +73,11 @@ main.py
   ├── hand_tracking.py        → get_all_hands_data() mỗi frame
   ├── gesture_recognition.py  → coordinator.process() hoặc recognizer.recognize()
   │     ├── PrimaryHandRecognizer    (tay phải: chuột)
-  │     ├── SecondaryHandRecognizer  (tay trái: system)
+  │     ├── SecondaryHandRecognizer  (tay trái: swipe V2/zoom/toggle)
   │     └── GestureCoordinator       (điều phối 2 tay)
-  ├── mouse_controller.py     → process_gesture(), type_text(), press_enter()
+  ├── context_manager.py      → update() + get_current_context() [MỚI]
+  ├── action_router.py        → resolve(gesture) → action_name [MỚI]
+  ├── mouse_controller.py     → process_gesture(), execute_action(), type_text()
   ├── voice_input.py          → listen_and_recognize() (trong thread riêng)
   └── config.py               → import ở tất cả các file
 ```
@@ -87,27 +92,30 @@ main.py
 │                                                               │
 │  1. cap.read() → cv2.flip(frame, 1)     [Mirror webcam]      │
 │                                                               │
-│  2. detector.find_hands(frame)          [MediaPipe detect]   │
-│     detector.get_all_hands_data()                            │
+│  2. context_manager.update()            [Context detect]     │
+│     → classify active window → browser/presentation/...      │
+│                                                               │
+│  3. detector.find_hands(frame)          [MediaPipe detect]   │
 │     → [{handedness, landmarks, fingers, palm_size, bbox}]    │
 │                                                               │
-│  3. Hand Assignment                     [Gán vai tay]        │
-│     "Right" → primary_hand                                   │
-│     "Left"  → secondary_hand                                 │
+│  4. Hand Assignment                     [Gán vai tay]        │
+│     "Right" → primary_hand (tay phải)                        │
+│     "Left"  → secondary_hand (tay trái)                      │
 │                                                               │
-│  4. Mode Switching (hysteresis)         [Chọn chế độ]        │
+│  5. Mode Switching (hysteresis)         [Chọn chế độ]        │
 │     2 tay ≥ 5 frame → TWO_HAND                               │
 │     < 2 tay ≥ 30 frame → ONE_HAND FALLBACK                   │
 │                                                               │
-│  5. Gesture Recognition                 [Nhận diện]          │
+│  6. Gesture Recognition                 [Nhận diện]          │
 │     TWO_HAND → coordinator.process()                         │
 │     ONE_HAND → primary/secondary recognizer riêng lẻ        │
 │                                                               │
-│  6. MouseController.process_gesture()   [Thực thi]           │
+│  7. MouseController.process_gesture()   [Thực thi]           │
+│     Swipe/Zoom → action_router.resolve() → execute_action()  │
 │                                                               │
-│  7. Draw Overlay → cv2.imshow()         [Hiển thị]           │
+│  8. Draw Overlay → draw_context_hud()→ cv2.imshow()          │
 │                                                               │
-│  8. cv2.waitKey() + keyboard hook       [Phím điều khiển]    │
+│  9. cv2.waitKey() + keyboard hook       [Phím điều khiển]    │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -219,7 +227,7 @@ coordinator.process(primary_hand, secondary_hand)
 | **Cử chỉ** | Chỉ ngón trỏ giơ lên `[x,1,0,0,0]` |
 | **ROI** | Camera 640×480 với padding 100px ngang, 120px dọc |
 | **Smoothing** | Nội suy tuyến tính, factor = 4 |
-| **Deadzone** | 3px — không move nếu tay đứng yên |
+| **Deadzone** | 5px — không move nếu tay đứng yên |
 | **Action** | `pyautogui.moveTo(x, y)` |
 
 **Pipeline tọa độ:**
@@ -283,23 +291,31 @@ camera (x,y) → clamp(ROI) → map(screen) → smooth() → deadzone check → 
 
 ---
 
-### 6.8 Swipe Left / Right (tay trái)
+### 6.8 Swipe Left / Right (tay trái) — Swipe V2
 
 | | |
 |---|---|
-| **Cử chỉ** | ≥ 4 ngón giơ, vuốt ngang ≥ 80px trong < 0.5s |
-| **Frame stability** | 2 frame liên tục thỏa điều kiện mới bắt đầu tracking |
-| **Cooldown** | 0.8s giữa các lần swipe |
-| **Swipe Left** | Nội dung tiếp theo |
-| **Swipe Right** | Nội dung trước |
+| **Cử chỉ** | 4 ngón giơ, ngón cái cụp `[0,1,1,1,1]` |
+| **Thuật toán** | State Machine V2: `IDLE → ARMED → TRACKING → COOLDOWN` |
+| **Khoảng cách** | ≥ 60px ngang |
+| **Tốc độ** | ≥ 120 px/s |
+| **Thời gian** | 0.12s → 0.9s |
+| **Cooldown** | 0.7s giữa các lần swipe |
+| **Grace frames** | 4 frame mất pose vẫn giữ state (tránh reset sớm) |
+| **Swipe Left** ← | Lùi / previous / back |
+| **Swipe Right** → | Tiến / next / forward |
 
-**3 chế độ swipe** (cấu hình bằng `SWIPE_MODE` trong config.py):
+**Context-Aware routing** (tự động theo ứng dụng đang mở):
 
-| Mode | Swipe Left | Swipe Right | Dùng cho |
-|---|---|---|---|
-| `"arrow"` | `→` (right arrow) | `←` (left arrow) | PowerPoint, Google Slides |
-| `"page"` | `PageDown` | `PageUp` | PDF Viewer |
-| `"browser"` | `Alt+Right` | `Alt+Left` | **Trình duyệt web** (mặc định) |
+| Context | Swipe Left ← | Swipe Right → |
+|---|---|---|
+| Browser | `Alt+Left` (back) | `Alt+Right` (forward) |
+| Presentation | `←` (previous slide) | `→` (next slide) |
+| Document/PDF | `PageUp` | `PageDown` |
+| Media | Previous track | Next track |
+| Default | `←` | `→` |
+
+**Phân biệt với Toggle**: Swipe pose `[0,1,1,1,1]` (ngón cái cụp) ≠ Toggle pose `[1,1,1,1,1]` (5 ngón). Không xung đột.
 
 ---
 
@@ -339,7 +355,7 @@ VOICE_DONE: Hoàn thành (hoặc VOICE_ERROR nếu có lỗi)
 ### State machine
 
 ```
-VOICE_IDLE ──[Ctrl+Shift+V]──► VOICE_LISTENING ──[im lặng > 5s]──► VOICE_ERROR
+VOICE_IDLE ──[Ctrl+Alt+V]──► VOICE_LISTENING ──[im lặng > 5s]──► VOICE_ERROR
                                       │
                                [có giọng nói]
                                       │
@@ -351,8 +367,6 @@ VOICE_IDLE ──[Ctrl+Shift+V]──► VOICE_LISTENING ──[im lặng > 5s]�
 ```
 
 ### Tại sao không mất focus ô nhập?
-
-Vấn đề gốc: Cách cũ dùng `tkinter.Tk()` để copy clipboard → window tkinter ẩn vẫn **steal focus** khỏi browser → `Ctrl+V` paste vào sai chỗ.
 
 **Giải pháp**: Dùng **Windows Clipboard API qua `ctypes`** (built-in Python):
 ```
@@ -366,7 +380,7 @@ Không tạo window → **browser giữ nguyên focus** → Ctrl+V paste đúng 
 | Config | Giá trị mặc định | Ý nghĩa |
 |---|---|---|
 | `ENABLE_VOICE_INPUT` | `True` | Bật/tắt chức năng |
-| `VOICE_HOTKEY` | `"ctrl+shift+v"` | Global hotkey kích hoạt |
+| `VOICE_HOTKEY` | `"ctrl+alt+v"` | Global hotkey kích hoạt |
 | `VOICE_LANGUAGE` | `"vi-VN"` | Ngôn ngữ STT (đổi `"en-US"` cho tiếng Anh) |
 | `VOICE_LISTEN_TIMEOUT` | `5` | Chờ tối đa 5s để bắt đầu nghe |
 | `VOICE_PHRASE_TIME_LIMIT` | `10` | Tối đa 10s cho 1 câu nói |
@@ -413,10 +427,11 @@ Cửa sổ webcam hiển thị real-time:
 ```
 ┌──────────────────────────────────────────────────────┐
 │  FPS: 28    Gesture: Move Cursor    System: ON        │  ← HUD
-│                                                       │
-│              [ SWIPE LEFT ]                           │  ← Banner gesture lớn (linger 12f)
-│                                                       │
-│   [ZOOM MODE] hoặc [SWIPE TRACKING]                   │  ← Mode indicator
+│                                    ┌───────────────┐ │
+│                                    │CTX: Browser   │ │  ← Context HUD
+│              [ SWIPE LEFT ]        │ACT: browser.. │ │  ← (góc trên-phải)
+│                                    │WIN: Chrome... │ │
+│   [ZOOM MODE] hoặc [SWIPE TRACKING]└───────────────┘ │  ← Mode indicator
 │                                                       │
 │        ┌──────────────┐                               │
 │        │  ROI border  │  ← Vùng di chuyển chuột       │
@@ -433,6 +448,8 @@ Cửa sổ webcam hiển thị real-time:
 │                                          S: Toggle    │
 └──────────────────────────────────────────────────────┘
 ```
+
+**Context HUD** (góc trên-phải): Viền màu theo context (vàng=Browser, xanh lá=Presentation, xanh dương=Document, tím=Media, xám=Default). Dòng ACT hiện xanh khi có action, xám khi idle.
 
 **Debug overlay** (mỗi tay): `MP:Right=PRI` / `MP:Left=SEC` — xác nhận role assignment đúng.
 
@@ -465,17 +482,30 @@ MODE_ENTER_TWO_HAND_FRAMES = 5    # Cần 5 frame liên tục thấy 2 tay
 MODE_EXIT_TWO_HAND_FRAMES = 30    # Cần 30 frame mất 1 tay mới về fallback
 ```
 
-### Swipe mode
+### Context-Aware Gestures
 
 ```python
-SWIPE_MODE = "browser"    # "arrow" | "page" | "browser"
+ENABLE_CONTEXT_AWARE    = True   # Bật/tắt toàn bộ Context-Aware
+CONTEXT_CACHE_INTERVAL  = 0.5    # Chu kỳ query active window (giây)
+SHOW_CONTEXT_HUD        = True   # Hiện Context HUD góc trên-phải
+CONTEXT_STICKY_SECONDS  = 2.0    # Giữ context cũ khi tạm về default
+```
+
+### Swipe V2
+
+```python
+ENABLE_SWIPE_V2             = True   # Bật State Machine V2
+SWIPE_V2_MIN_DISTANCE_X     = 60     # Khoảng cách ngang tối thiểu (px)
+SWIPE_V2_MIN_VELOCITY_X     = 120    # Tốc độ tối thiểu (px/s)
+SWIPE_V2_COOLDOWN           = 0.7    # Cooldown giữa các lần swipe
+SWIPE_V2_LOST_GRACE_FRAMES  = 4      # Frame cho phép mất pose
 ```
 
 ### Voice Input
 
 ```python
 ENABLE_VOICE_INPUT = True
-VOICE_HOTKEY = "ctrl+shift+v"
+VOICE_HOTKEY = "ctrl+alt+v"
 VOICE_LANGUAGE = "vi-VN"
 VOICE_AUTO_ENTER = False
 ```
@@ -516,7 +546,7 @@ python main.py
 2. Giơ **tay trái** với cả 5 ngón, giữ yên **3 giây** → System **ON**
 3. Dùng **tay phải** di chuyển chuột, click, scroll
 4. Dùng **tay trái** để swipe slide, zoom trang
-5. Nhấn **Ctrl+Shift+V** để dùng voice input
+5. Nhấn **Ctrl+Alt+V** để dùng voice input
 
 ---
 
@@ -526,7 +556,7 @@ python main.py
 |---|---|
 | `Q` | Thoát chương trình |
 | `S` | Toggle System ON/OFF nhanh (không cần cử chỉ) |
-| `Ctrl+Shift+V` | Bật Voice Input (global, không cần focus webcam) |
+| `Ctrl+Alt+V` | Bật Voice Input (global, không cần focus webcam) |
 
 ---
 
@@ -560,29 +590,43 @@ hand_tracking.py
       get_all_hands_data(frame)
       → [{handedness, landmarks, fingers, palm_size, center, bbox}]
 
+context_manager.py  [MỚI]
+└── ContextManager
+      update()                       ← gọi mỗi frame (có cache 0.5s)
+      get_current_context() → str    ← browser/presentation/document/media/default
+      get_current_window_title() → str
+      classify_window(title) → str
+      get_context_display() → str    ← "CTX: Browser"
+      get_last_non_default_context() ← sticky context
+
+action_router.py  [MỚI]
+└── ActionRouter(context_manager)
+      resolve(gesture_name) → action_name
+      get_last_action() → str
+      get_last_context() → str
+
 mouse_controller.py
-└── MouseController
+└── MouseController(action_router=None)
       process_gesture(result_dict)   ← entry point chính
-      move_cursor(cam_pos)
-      left_click / double_click / right_click(anchor)
-      drag_start / drag_move / drag_end
-      scroll(amount)
-      swipe_action(gesture_name)     ← 3 mode: arrow/page/browser
-      zoom_in / zoom_out
+      execute_action(action_name)    ← [MỚI] thực thi action từ router
+      move_cursor / click / drag / scroll / zoom_in / zoom_out
+      swipe_action(gesture_name)     ← context-aware nếu router có mặt
       type_text(text)                ← ctypes clipboard, không steal focus
       press_enter()
 
 voice_input.py
 └── VoiceInputManager
       listen_and_recognize()  ← BLOCKING, gọi trong thread riêng
-      reset()
       → {"state": VoiceState, "text": str, "error": str}
 
 main.py
 └── main()
-      ├── HandDetector, GestureCoordinator, MouseController, VoiceInputManager
+      ├── HandDetector, GestureCoordinator
+      ├── ContextManager + ActionRouter (safe init, fallback None)
+      ├── MouseController(action_router=action_router)
       ├── keyboard.add_hotkey(VOICE_HOTKEY, callback)
-      ├── Main loop (frame → detect → assign → mode → recognize → action → draw)
+      ├── Main loop (context.update → detect → assign → mode → recognize → action → draw)
+      ├── draw_context_hud()         ← [MỚI] HUD góc trên-phải
       └── cv2.waitKey() → Q/S keys
 ```
 
@@ -603,4 +647,30 @@ keyboard
 
 ---
 
-*Tài liệu này phản ánh trạng thái hệ thống tính đến tháng 4/2026.*
+## 14. Changelog Phase
+
+### Phase: Context-Aware Gestures + Swipe V2 — **COMPLETED** ✅
+*Tháng 5/2026 · Review: Gemini Pro High PASS*
+
+| File | Thay đổi |
+|---|---|
+| `config.py` | Append Section 10: Context-Aware constants + Swipe V2 constants |
+| `context_manager.py` | [MỚI] Detect active window, classify context, sticky mechanism |
+| `action_router.py` | [MỚI] Route (gesture, context) → action_name |
+| `mouse_controller.py` | Thêm `execute_action()`, tích hợp ActionRouter, anti-spam warning |
+| `main.py` | Safe init ContextManager/ActionRouter, `draw_context_hud()`, `context_manager.update()` mỗi frame |
+| `gesture_recognition.py` | Swipe V2 State Machine trong `SecondaryHandRecognizer` |
+
+**Validation PASS:**
+- ✅ App chạy, không crash import/init
+- ✅ Context HUD đúng màu (Browser=vàng, Presentation=xanh lá, Document=xanh dương, Media=tím)
+- ✅ Sticky context 2s khi tạm về default
+- ✅ Swipe Left/Right route đúng context
+- ✅ Zoom media → volume_up/volume_down
+- ✅ Toggle 5 ngón không xung đột Swipe V2
+- ✅ Zoom 2 ngón không xung đột Swipe V2
+- ✅ Move/click/drag/scroll/voice không bị ảnh hưởng
+
+---
+
+*Tài liệu này phản ánh trạng thái hệ thống tính đến tháng 5/2026.*
