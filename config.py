@@ -337,3 +337,9 @@ CONTEXT_MEDIA_KEYWORDS = [
     "trình phát đa phương tiện",        # Windows Media Player - tieng Viet (Unicode)
     "trinh phat da phuong tien",        # Windows Media Player - tieng Viet (khong dau)
 ]
+
+# ==============================================================================
+# Section 11: Gesture Logging (phuc vu chuong thuc nghiem bao cao)
+# ==============================================================================
+ENABLE_GESTURE_LOGGING = True   # True = ghi log ra CSV; False = tat hoan toan
+GESTURE_LOG_DIR        = "logs" # Thu muc chua file log (tu tao neu chua co)

@@ -50,6 +50,14 @@ except Exception as _ctx_import_err:
     print(f"[WARN] Context-Aware modules import failed: {_ctx_import_err}")
     _CONTEXT_MODULES_OK = False
 
+# --- Gesture Logging: safe import ---
+try:
+    from gesture_logger import GestureLogger
+    _LOGGER_MODULE_OK = True
+except Exception as _log_import_err:
+    print(f"[WARN] GestureLogger import failed: {_log_import_err}")
+    _LOGGER_MODULE_OK = False
+
 if cfg.ENABLE_VOICE_INPUT:
     import keyboard
     from voice_input import VoiceInputManager, VoiceState
@@ -450,6 +458,19 @@ def main():
 
     controller = MouseController(action_router=action_router)
 
+    # --- Gesture Logger ---
+    gesture_logger = None
+    if getattr(cfg, "ENABLE_GESTURE_LOGGING", False) and _LOGGER_MODULE_OK:
+        try:
+            gesture_logger = GestureLogger(
+                enabled=cfg.ENABLE_GESTURE_LOGGING,
+                log_dir=getattr(cfg, "GESTURE_LOG_DIR", "logs"),
+            )
+            controller.event_logger = gesture_logger
+        except Exception as _log_init_err:
+            print(f"  [WARN] GestureLogger init failed: {_log_init_err} -- logging disabled")
+            gesture_logger = None
+
     # --- Voice Input ---
     if cfg.ENABLE_VOICE_INPUT:
         voice_manager = VoiceInputManager()
@@ -514,6 +535,10 @@ def main():
     print(f"  Smoothing: {cfg.SMOOTHING_FACTOR}")
     print(f"  Two-Hand Mode: {cfg.ENABLE_TWO_HAND_MODE}")
     print(f"  Dominant Hand: {cfg.DOMINANT_HAND}")
+    if gesture_logger and gesture_logger.get_log_path():
+        print(f"  Gesture Log: {gesture_logger.get_log_path()}")
+    else:
+        print(f"  Gesture Log: OFF")
     print(f"  System: OFF (hold 5 fingers on secondary hand 3s to enable)")
     print("=" * 50)
     print("  Press 'q' to quit | 's' to toggle control")
@@ -1011,6 +1036,11 @@ def main():
     finally:
         if controller.is_dragging:
             controller.drag_end()
+        if gesture_logger is not None:
+            try:
+                gesture_logger.close()
+            except Exception:
+                pass
         if cfg.ENABLE_VOICE_INPUT:
             keyboard.unhook_all_hotkeys()   # Giai phong global hotkey khi thoat
         cap.release()

@@ -41,7 +41,8 @@ class MouseController:
         is_dragging: Trạng thái đang kéo-thả
     """
 
-    def __init__(self, smoothing_factor=cfg.SMOOTHING_FACTOR, action_router=None):
+    def __init__(self, smoothing_factor=cfg.SMOOTHING_FACTOR, action_router=None,
+                 event_logger=None):
         self.screen_w, self.screen_h = pyautogui.size()
         self.smoothing_factor = smoothing_factor
         self.prev_x = self.screen_w // 2
@@ -54,6 +55,9 @@ class MouseController:
         self.last_routed_action: str = "no_action"  # Action name tu lan route gan nhat
         self.last_routed_context: str = "default"   # Context tu lan route gan nhat
         self._action_warning_printed: set = set()   # Tranh spam warning cung 1 action
+
+        # --- Gesture Logging (optional) ---
+        self.event_logger = event_logger            # GestureLogger instance hoac None
 
     def process_gesture(self, gesture_result):
         """
@@ -387,7 +391,20 @@ class MouseController:
             self.last_routed_action = action_name
             self.last_routed_context = self.action_router.get_last_context()
             print(f"[SWIPE] context={self.last_routed_context} -> {action_name}")
-            return self.execute_action(action_name)
+            executed = self.execute_action(action_name)
+            # --- Log swipe event ---
+            if self.event_logger is not None:
+                try:
+                    self.event_logger.log_event(
+                        context=self.last_routed_context,
+                        gesture=gesture_name,
+                        action=action_name,
+                        executed=bool(executed),
+                        note="swipe",
+                    )
+                except Exception:
+                    pass  # Logger loi khong anh huong app
+            return executed
 
         # --- Legacy path (fallback) ---
         mode, title = self._resolve_swipe_mode()
@@ -418,25 +435,49 @@ class MouseController:
                 print("[ACTION] Swipe Right -> press('left')")
 
     def zoom_in(self):
-        """Zoom In — context-aware neu co ActionRouter, fallback Ctrl+=."""
+        """Zoom In - context-aware neu co ActionRouter, fallback Ctrl+=."""
         if cfg.ENABLE_CONTEXT_AWARE and self.action_router is not None:
             action_name = self.action_router.resolve("zoom_in")
             self.last_routed_action = action_name
             self.last_routed_context = self.action_router.get_last_context()
             print(f"[ZOOM] context={self.last_routed_context} -> {action_name}")
-            return self.execute_action(action_name)
+            executed = self.execute_action(action_name)
+            if self.event_logger is not None:
+                try:
+                    self.event_logger.log_event(
+                        context=self.last_routed_context,
+                        gesture="Zoom In",
+                        action=action_name,
+                        executed=bool(executed),
+                        note="zoom",
+                    )
+                except Exception:
+                    pass
+            return executed
         # Legacy
         pyautogui.hotkey('ctrl', '=')
         print("[ACTION] Zoom In -> Ctrl+=")
 
     def zoom_out(self):
-        """Zoom Out — context-aware neu co ActionRouter, fallback Ctrl+-."""
+        """Zoom Out - context-aware neu co ActionRouter, fallback Ctrl+-."""
         if cfg.ENABLE_CONTEXT_AWARE and self.action_router is not None:
             action_name = self.action_router.resolve("zoom_out")
             self.last_routed_action = action_name
             self.last_routed_context = self.action_router.get_last_context()
             print(f"[ZOOM] context={self.last_routed_context} -> {action_name}")
-            return self.execute_action(action_name)
+            executed = self.execute_action(action_name)
+            if self.event_logger is not None:
+                try:
+                    self.event_logger.log_event(
+                        context=self.last_routed_context,
+                        gesture="Zoom Out",
+                        action=action_name,
+                        executed=bool(executed),
+                        note="zoom",
+                    )
+                except Exception:
+                    pass
+            return executed
         # Legacy
         pyautogui.hotkey('ctrl', '-')
         print("[ACTION] Zoom Out -> Ctrl+-")
