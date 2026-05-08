@@ -70,17 +70,28 @@ _DISPLAY_LABEL: dict[str, str] = {
 class ContextManager:
     """Phat hien va phan loai context cua so dang active.
 
+    Co co che Sticky Context: neu active window tam ve "default" (vi du camera
+    window, File Explorer), context cu se duoc giu trong CONTEXT_STICKY_SECONDS
+    truoc khi thuc su roi ve "default".
+
     Attributes:
-        _context:       Context hien tai ("browser" | "presentation" |
-                        "document" | "media" | "default").
-        _window_title:  Title cua so lay lan cuoi.
-        _last_update:   Thoi diem cap nhat cuoi (time.monotonic).
+        _context:                  Context hien tai tra ve cho caller.
+        _window_title:             Title cua so lay lan cuoi.
+        _last_update:              Thoi diem cap nhat cuoi (time.monotonic).
+        _last_non_default_context: Context co y nghia gan nhat (khac default).
+        _last_non_default_title:   Window title tuong ung.
+        _last_non_default_time:    Thoi diem luu context khac default lan cuoi.
     """
 
     def __init__(self) -> None:
         self._context: str = "default"
         self._window_title: str = ""
         self._last_update: float = 0.0
+
+        # --- Sticky context state ---
+        self._last_non_default_context: str = "default"
+        self._last_non_default_title: str = ""
+        self._last_non_default_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -150,25 +161,51 @@ class ContextManager:
         label = _DISPLAY_LABEL.get(self._context, self._context.capitalize())
         return f"CTX: {label}"
 
+    def get_last_non_default_context(self) -> str:
+        """Tra ve context co y nghia gan nhat (khac default).
+
+        Returns:
+            Context string, hoac "default" neu chua co.
+        """
+        return self._last_non_default_context
+
+    def get_last_non_default_window_title(self) -> str:
+        """Tra ve window title cua lan cuoi context khac default."""
+        return self._last_non_default_title
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
-        """Thuc hien query Windows API va cap nhat context."""
+        """Thuc hien query Windows API, ap dung sticky logic va cap nhat context."""
         try:
             title = _get_foreground_window_title()
         except Exception:
-            # Bao ve: neu Windows API loi (UAC window, v.v.) -> fallback
             title = ""
 
         self._window_title = title
 
-        if not title:
-            self._context = "default"
-            return
+        # Classify title hien tai
+        raw_ctx = self.classify_window(title) if title else "default"
 
-        self._context = self.classify_window(title)
+        now = time.monotonic()
+
+        if raw_ctx != "default":
+            # Context co y nghia: luu sticky va dung luon
+            self._last_non_default_context = raw_ctx
+            self._last_non_default_title   = title
+            self._last_non_default_time    = now
+            self._context = raw_ctx
+        else:
+            # Context ve default: kiem tra sticky window
+            sticky_secs = getattr(config, "CONTEXT_STICKY_SECONDS", 2.0)
+            elapsed = now - self._last_non_default_time
+            if elapsed <= sticky_secs and self._last_non_default_context != "default":
+                # Van trong thoi gian sticky: giu context cu
+                self._context = self._last_non_default_context
+            else:
+                self._context = "default"
 
 
 # ---------------------------------------------------------------------------

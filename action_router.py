@@ -26,17 +26,17 @@ if TYPE_CHECKING:
 
 ACTION_TABLE: dict[str, dict[str, str]] = {
     "swipe_left": {
-        "browser":      "browser_forward",
-        "presentation": "next_slide",
-        "document":     "page_down",
-        "media":        "next_track",
-        "default":      "default_swipe_left",
-    },
-    "swipe_right": {
         "browser":      "browser_back",
         "presentation": "previous_slide",
         "document":     "page_up",
         "media":        "previous_track",
+        "default":      "default_swipe_left",
+    },
+    "swipe_right": {
+        "browser":      "browser_forward",
+        "presentation": "next_slide",
+        "document":     "page_down",
+        "media":        "next_track",
         "default":      "default_swipe_right",
     },
     "zoom_in": {

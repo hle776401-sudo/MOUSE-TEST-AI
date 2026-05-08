@@ -277,11 +277,11 @@ class MouseController:
             elif action_name == "previous_track":
                 pyautogui.press("prevtrack")
 
-            # --- Default swipe (fallback giong hanh vi cu) ---
+            # --- Default swipe (Left=lùi, Right=tiến) ---
             elif action_name == "default_swipe_left":
-                pyautogui.press("right")
-            elif action_name == "default_swipe_right":
                 pyautogui.press("left")
+            elif action_name == "default_swipe_right":
+                pyautogui.press("right")
 
             else:
                 # action_name chua duoc map -> bo qua, khong crash

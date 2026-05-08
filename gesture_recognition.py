@@ -1033,12 +1033,22 @@ class SecondaryHandRecognizer:
         self._toggle_cooldown_time = 0
         self._five_fingers_start = 0
 
-        # --- Swipe ---
-        self._swipe_tracking = False
-        self._swipe_start_x = 0
-        self._swipe_start_time = 0
-        self._swipe_cooldown_time = 0
-        self._swipe_frame_count = 0
+        # --- Swipe V2 State Machine ---
+        # States: IDLE / ARMED / TRACKING / COOLDOWN
+        self._swipe_state: str = "IDLE"
+        self._swipe_pose_stable_count: int = 0
+        self._swipe_start_x: float = 0.0
+        self._swipe_start_time: float = 0.0
+        self._swipe_last_x: float = 0.0
+        self._swipe_last_time: float = 0.0
+        self._swipe_lost_frames: int = 0
+        self._last_swipe_time: float = 0.0
+        # Legacy (V1) compat — dung khi ENABLE_SWIPE_V2 = False
+        self._swipe_tracking: bool = False
+        self._swipe_frame_count: int = 0
+        self._swipe_cooldown_time: float = 0.0
+        # Debug info (doc boi get_swipe_debug_info)
+        self._swipe_debug: dict = {}
 
         # --- Zoom ---
         self._zoom_active = False
@@ -1223,9 +1233,238 @@ class SecondaryHandRecognizer:
 
         return None
 
-    # --- Swipe (copy tu GestureRecognizer) ---
+    # --- Swipe V2 State Machine ---
     def _check_swipe(self, fingers, hand_center, now):
-        # 4 ngon chinh phai gio
+        """Swipe detection V2 — State Machine + Movement Buffer.
+
+        States:
+          IDLE     : Chua thay pose hop le.
+          ARMED    : Pose on dinh du SWIPE_V2_POSE_STABLE_FRAMES, cho di chuyen.
+          TRACKING : Dang theo doi chuyen dong ngang.
+          COOLDOWN : Vua trigger swipe, khoa de tranh re-trigger.
+
+        Pose hop le (Swipe): thumb=0, index=1, middle=1, ring=1, pinky=1
+        (4 ngon chinh gio, ngon cai cup — khac Toggle 5 ngon).
+
+        Fallback legacy khi ENABLE_SWIPE_V2 = False.
+        """
+        # ----------------------------------------------------------------
+        # LEGACY FALLBACK (V1)
+        # ----------------------------------------------------------------
+        if not getattr(cfg, "ENABLE_SWIPE_V2", True):
+            return self._check_swipe_legacy(fingers, hand_center, now)
+
+        # ----------------------------------------------------------------
+        # CONFIG (getattr de safe khi config chua update)
+        # ----------------------------------------------------------------
+        POSE_STABLE = getattr(cfg, "SWIPE_V2_POSE_STABLE_FRAMES", 3)
+        MIN_DX      = getattr(cfg, "SWIPE_V2_MIN_DISTANCE_X",     60)
+        MAX_TIME    = getattr(cfg, "SWIPE_V2_MAX_TIME",           0.9)
+        MIN_TIME    = getattr(cfg, "SWIPE_V2_MIN_TIME",          0.12)
+        MIN_VEL     = getattr(cfg, "SWIPE_V2_MIN_VELOCITY_X",    120)
+        GRACE       = getattr(cfg, "SWIPE_V2_LOST_GRACE_FRAMES",   4)
+        COOLDOWN    = getattr(cfg, "SWIPE_V2_COOLDOWN",           0.7)
+        INVERT      = getattr(cfg, "SWIPE_V2_INVERT_DIRECTION", False)
+        DO_DEBUG    = getattr(cfg, "SWIPE_V2_DEBUG",             True)
+
+        # ----------------------------------------------------------------
+        # Swipe pose check: thumb=0, index+middle+ring+pinky=1
+        # ----------------------------------------------------------------
+        pose_ok = (
+            fingers[0] == 0 and
+            fingers[1] == 1 and
+            fingers[2] == 1 and
+            fingers[3] == 1 and
+            fingers[4] == 1
+        )
+
+        # ----------------------------------------------------------------
+        # Lay current_x
+        # ----------------------------------------------------------------
+        current_x = hand_center[0] if hand_center is not None else None
+
+        # ----------------------------------------------------------------
+        # STATE: COOLDOWN
+        # ----------------------------------------------------------------
+        if self._swipe_state == "COOLDOWN":
+            if (now - self._last_swipe_time) >= COOLDOWN:
+                self._swipe_state = "IDLE"
+                self._swipe_pose_stable_count = 0
+            # Trong cooldown: ket thuc ham, khong xu ly gi them
+            if DO_DEBUG:
+                self._swipe_debug = {
+                    "state": "COOLDOWN",
+                    "cooldown_remaining": round(COOLDOWN - (now - self._last_swipe_time), 2),
+                }
+            # Sync legacy flag
+            self._swipe_tracking = False
+            return None
+
+        # ----------------------------------------------------------------
+        # Khong co hand_center -> reset ve IDLE
+        # ----------------------------------------------------------------
+        if current_x is None:
+            self._swipe_state = "IDLE"
+            self._swipe_pose_stable_count = 0
+            self._swipe_lost_frames = 0
+            self._swipe_tracking = False
+            return None
+
+        # ----------------------------------------------------------------
+        # STATE: IDLE
+        # ----------------------------------------------------------------
+        if self._swipe_state == "IDLE":
+            if pose_ok:
+                self._swipe_pose_stable_count += 1
+                if self._swipe_pose_stable_count >= POSE_STABLE:
+                    # Pose on dinh du frame -> ARMED
+                    self._swipe_state = "ARMED"
+                    self._swipe_start_x = current_x
+                    self._swipe_start_time = now
+                    self._swipe_last_x = current_x
+                    self._swipe_last_time = now
+                    self._swipe_lost_frames = 0
+            else:
+                self._swipe_pose_stable_count = 0
+
+            if DO_DEBUG:
+                self._swipe_debug = {
+                    "state": "IDLE",
+                    "pose_ok": pose_ok,
+                    "stable_count": self._swipe_pose_stable_count,
+                }
+            self._swipe_tracking = False
+            return None
+
+        # ----------------------------------------------------------------
+        # STATE: ARMED
+        # ----------------------------------------------------------------
+        if self._swipe_state == "ARMED":
+            if not pose_ok:
+                self._swipe_lost_frames += 1
+                if self._swipe_lost_frames > GRACE:
+                    self._swipe_state = "IDLE"
+                    self._swipe_pose_stable_count = 0
+                    self._swipe_lost_frames = 0
+                    self._swipe_tracking = False
+                if DO_DEBUG:
+                    self._swipe_debug = {
+                        "state": "ARMED",
+                        "pose_ok": False,
+                        "lost_frames": self._swipe_lost_frames,
+                        "last_reason": "pose_lost_grace",
+                    }
+                return None
+
+            self._swipe_lost_frames = 0
+
+            # Timeout kem theo ARMED
+            if (now - self._swipe_start_time) > MAX_TIME:
+                self._swipe_state = "IDLE"
+                self._swipe_pose_stable_count = 0
+                self._swipe_tracking = False
+                if DO_DEBUG:
+                    self._swipe_debug = {"state": "ARMED", "last_reason": "timeout"}
+                return None
+
+            # Co chuyen dong ngang -> chuyen TRACKING
+            dx = current_x - self._swipe_start_x
+            if abs(dx) > (MIN_DX * 0.25):   # 25% distance = bat dau track
+                self._swipe_state = "TRACKING"
+                self._swipe_last_x = current_x
+                self._swipe_last_time = now
+                self._swipe_tracking = True  # sync legacy flag
+
+            if DO_DEBUG:
+                self._swipe_debug = {
+                    "state": "ARMED",
+                    "pose_ok": True,
+                    "dx": round(current_x - self._swipe_start_x, 1),
+                    "elapsed": round(now - self._swipe_start_time, 3),
+                }
+            return None
+
+        # ----------------------------------------------------------------
+        # STATE: TRACKING
+        # ----------------------------------------------------------------
+        if self._swipe_state == "TRACKING":
+            if not pose_ok:
+                self._swipe_lost_frames += 1
+                if self._swipe_lost_frames > GRACE:
+                    # Mat pose qua lau -> reset
+                    self._swipe_state = "IDLE"
+                    self._swipe_pose_stable_count = 0
+                    self._swipe_lost_frames = 0
+                    self._swipe_tracking = False
+                if DO_DEBUG:
+                    self._swipe_debug = {
+                        "state": "TRACKING",
+                        "pose_ok": False,
+                        "lost_frames": self._swipe_lost_frames,
+                    }
+                return None
+
+            self._swipe_lost_frames = 0
+
+            dx      = current_x - self._swipe_start_x
+            elapsed = now - self._swipe_start_time
+            vel_x   = abs(dx) / max(elapsed, 0.001)
+
+            # Cap nhat last position
+            self._swipe_last_x    = current_x
+            self._swipe_last_time = now
+
+            if DO_DEBUG:
+                self._swipe_debug = {
+                    "state": "TRACKING",
+                    "pose_ok": True,
+                    "dx": round(dx, 1),
+                    "elapsed": round(elapsed, 3),
+                    "velocity_x": round(vel_x, 1),
+                    "lost_frames": 0,
+                }
+
+            # Timeout
+            if elapsed > MAX_TIME:
+                self._swipe_state = "IDLE"
+                self._swipe_pose_stable_count = 0
+                self._swipe_tracking = False
+                if DO_DEBUG:
+                    self._swipe_debug["last_reason"] = "timeout"
+                return None
+
+            # --- Kiem tra dieu kien trigger ---
+            if (elapsed  >= MIN_TIME and
+                abs(dx)  >= MIN_DX and
+                vel_x    >= MIN_VEL):
+
+                # Xac dinh huong
+                if INVERT:
+                    gesture = GESTURE_SWIPE_LEFT if dx > 0 else GESTURE_SWIPE_RIGHT
+                else:
+                    gesture = GESTURE_SWIPE_RIGHT if dx > 0 else GESTURE_SWIPE_LEFT
+
+                # Chuyen sang COOLDOWN
+                self._swipe_state      = "COOLDOWN"
+                self._last_swipe_time  = now
+                self._swipe_tracking   = False
+                self._post_action_time = now
+
+                if DO_DEBUG:
+                    self._swipe_debug["state"]       = "COOLDOWN"
+                    self._swipe_debug["last_reason"]  = "triggered"
+                    self._swipe_debug["triggered"]    = gesture
+
+                return gesture
+
+            return None
+
+        # Khong vao case nao -> fallback IDLE
+        self._swipe_state = "IDLE"
+        return None
+
+    def _check_swipe_legacy(self, fingers, hand_center, now):
+        """Swipe V1 (legacy) — giu nguyen de fallback khi ENABLE_SWIPE_V2=False."""
         four_fingers_up = (fingers[1] == 1 and fingers[2] == 1 and
                            fingers[3] == 1 and fingers[4] == 1)
 
@@ -1234,8 +1473,6 @@ class SecondaryHandRecognizer:
             self._swipe_frame_count = 0
             return None
 
-        # ENTERING: yeu cau thumb == 0 (tach biet voi Toggle 5 ngon)
-        # TRACKING: bo qua thumb (cho phep flicker)
         if not self._swipe_tracking and fingers[0] != 0:
             self._swipe_frame_count = 0
             return None
@@ -1250,10 +1487,8 @@ class SecondaryHandRecognizer:
             if self._swipe_frame_count < cfg.SWIPE_STABLE_FRAMES:
                 return None
             self._swipe_tracking = True
-            if self._prev_hand_center is not None:
-                self._swipe_start_x = self._prev_hand_center[0]
-            else:
-                self._swipe_start_x = current_x
+            self._swipe_start_x = (self._prev_hand_center[0]
+                                   if self._prev_hand_center else current_x)
             self._swipe_start_time = now
             return None
 
@@ -1268,10 +1503,7 @@ class SecondaryHandRecognizer:
             self._swipe_tracking = False
             self._swipe_cooldown_time = now
             self._post_action_time = now
-            if delta_x > 0:
-                return GESTURE_SWIPE_RIGHT
-            else:
-                return GESTURE_SWIPE_LEFT
+            return GESTURE_SWIPE_RIGHT if delta_x > 0 else GESTURE_SWIPE_LEFT
 
         return None
 
@@ -1290,10 +1522,26 @@ class SecondaryHandRecognizer:
             "pinch_state": "idle",
             "toggle_progress": self.get_toggle_progress(),
             "waiting_double": False,
-            "swipe_tracking": self._swipe_tracking,
+            "swipe_tracking": (
+                self._swipe_state == "TRACKING"
+                if getattr(cfg, "ENABLE_SWIPE_V2", True)
+                else self._swipe_tracking
+            ),
             "zoom_active": self._zoom_active,
             "click_freeze_until": 0,
         }
+
+    def get_swipe_debug_info(self) -> dict:
+        """Tra ve debug info cua Swipe V2 (doc boi main.py de hien thi HUD).
+
+        Returns:
+            dict voi cac key: state, pose_ok, stable_count, dx, elapsed,
+            velocity_x, lost_frames, cooldown_remaining, last_reason.
+            Tra ve {} neu ENABLE_SWIPE_V2 = False.
+        """
+        if not getattr(cfg, "ENABLE_SWIPE_V2", True):
+            return {}
+        return dict(self._swipe_debug)
 
     def _get_pinch_threshold(self, palm_size):
         if palm_size > 0:
@@ -1301,8 +1549,18 @@ class SecondaryHandRecognizer:
         return cfg.CLICK_DISTANCE_THRESHOLD
 
     def _reset_states(self):
+        self._swipe_state = "IDLE"
+        self._swipe_pose_stable_count = 0
+        self._swipe_start_x = 0.0
+        self._swipe_start_time = 0.0
+        self._swipe_last_x = 0.0
+        self._swipe_last_time = 0.0
+        self._swipe_lost_frames = 0
+        # Legacy compat
         self._swipe_tracking = False
         self._swipe_frame_count = 0
+        self._swipe_cooldown_time = 0.0
+        # Zoom
         self._zoom_active = False
         self._zoom_prev_distance = 0
         self._zoom_delta_acc = 0

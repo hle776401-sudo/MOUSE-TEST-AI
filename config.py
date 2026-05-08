@@ -268,6 +268,24 @@ CONTEXT_MODE           = "auto" # Che do context:
                                 #   "auto" = tu dong detect theo cua so dang active
                                 #   (cac gia tri khac se mo rong o dot sau)
 SHOW_CONTEXT_HUD       = True   # Hien thi context hien tai tren UI overlay (HUD)
+CONTEXT_STICKY_SECONDS = 2.0    # Giu context cu khi cua so tam ve default (giay)
+                                # Vi du: Swipe trong khi camera window active van
+                                # dung context cua app truoc trong 2 giay
+
+# --- Swipe V2: State Machine + Movement Buffer ---
+# Nếu ENABLE_SWIPE_V2 = False thì dùng logic Swipe cũ (legacy)
+ENABLE_SWIPE_V2              = True   # Bat Swipe V2 State Machine
+SWIPE_V2_POSE_STABLE_FRAMES  = 3      # So frame gio pose on dinh truoc khi ARMED
+SWIPE_V2_MIN_DISTANCE_X      = 60     # Khoang cach ngang toi thieu de trigger (pixels)
+SWIPE_V2_MAX_TIME            = 0.9    # Thoi gian toi da cho 1 swipe (giay)
+SWIPE_V2_MIN_TIME            = 0.12   # Thoi gian toi thieu (loai bo chuyen dong giat)
+SWIPE_V2_MIN_VELOCITY_X      = 120    # Toc do ngang toi thieu (pixels/giay)
+SWIPE_V2_LOST_GRACE_FRAMES   = 4      # Frame cho phep mat pose truoc khi reset
+SWIPE_V2_COOLDOWN            = 0.7    # Cooldown giua cac lan swipe (giay)
+SWIPE_V2_INVERT_DIRECTION    = False  # True = dao huong (dung khi cam bi nguoc)
+SWIPE_V2_DEBUG               = True   # Luu debug info (khong spam terminal)
+
+
 
 # --- Keyword groups de detect context theo ten cua so (title / process name) ---
 # So sanh case-insensitive, kiem tra xem keyword co xuat hien trong tieu de cua so khong.

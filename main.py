@@ -41,6 +41,15 @@ from gesture_recognition import (
 )
 from mouse_controller import MouseController
 
+# --- Context-Aware Gestures: safe import ---
+try:
+    from context_manager import ContextManager
+    from action_router import ActionRouter
+    _CONTEXT_MODULES_OK = True
+except Exception as _ctx_import_err:
+    print(f"[WARN] Context-Aware modules import failed: {_ctx_import_err}")
+    _CONTEXT_MODULES_OK = False
+
 if cfg.ENABLE_VOICE_INPUT:
     import keyboard
     from voice_input import VoiceInputManager, VoiceState
@@ -323,6 +332,86 @@ def draw_hotkey_help(frame, system_active):
         y -= 18
 
 
+def draw_context_hud(frame, context_manager, controller):
+    """Ve Context-Aware HUD o goc tren-phai neu SHOW_CONTEXT_HUD = True.
+
+    An toan khi context_manager hoac controller la None.
+    Khong block camera loop.
+
+    Args:
+        frame:           Frame OpenCV
+        context_manager: ContextManager instance hoac None
+        controller:      MouseController instance hoac None
+    """
+    if not cfg.SHOW_CONTEXT_HUD:
+        return
+    if context_manager is None:
+        return
+
+    try:
+        ctx        = context_manager.get_current_context()
+        ctx_label  = context_manager.get_context_display()
+        raw_title  = context_manager.get_current_window_title()
+        short_title = (raw_title[:32] + "...") if len(raw_title) > 32 else raw_title
+
+        last_action = "no_action"
+        if controller is not None:
+            last_action = getattr(controller, "last_routed_action", "no_action")
+
+        # Mau sac vien/tieu de theo context (BGR format - OpenCV)
+        ctx_color_map = {
+            "browser":      (  0, 255, 255),   # Vang tuoi    BGR(0,255,255)
+            "presentation": (  0, 255,   0),   # Xanh la tuoi BGR(0,255,0)
+            "document":     (255, 160,  60),   # Xanh duong   BGR(255,160,60)
+            "media":        (255,   0, 255),   # Tim hong     BGR(255,0,255)
+            "default":      (160, 160, 160),   # Xam
+        }
+        color = ctx_color_map.get(ctx, cfg.COLOR_WHITE)
+
+        # Mau dong ACT: xanh la sang neu co action, xam neu no_action
+        act_color = (0, 230, 100) if last_action != "no_action" else (120, 120, 120)
+
+        lines = [
+            ctx_label,
+            f"ACT: {last_action}",
+            f"WIN: {short_title}",
+        ]
+        line_colors = [color, act_color, cfg.COLOR_WHITE]
+
+        font       = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.48
+        thickness  = 1
+        line_h     = 20
+        pad        = 6
+
+        # Tinh chieu rong toi da
+        max_w = max(cv2.getTextSize(l, font, font_scale, thickness)[0][0] for l in lines)
+        box_w = max_w + pad * 2
+        box_h = line_h * len(lines) + pad * 2
+
+        # Goc tren-phai
+        x0 = cfg.CAMERA_WIDTH - box_w - 4
+        y0 = 4
+
+        # Nen ban trong suot
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (x0 + box_w, y0 + box_h), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+        # Vien mau theo context (2px de nhin ro hon)
+        cv2.rectangle(frame, (x0, y0), (x0 + box_w, y0 + box_h), color, 2)
+
+        # Text lines
+        for i, line in enumerate(lines):
+            ty = y0 + pad + line_h * (i + 1) - 2
+            cv2.putText(frame, line, (x0 + pad, ty),
+                        font, font_scale, line_colors[i], thickness)
+
+    except Exception:
+        pass  # Tuyet doi khong crash camera loop
+
+
+
 def main():
     """Hàm chính — khởi tạo modules, chạy vòng lặp real-time."""
     print("=" * 50)
@@ -342,7 +431,24 @@ def main():
     detector = HandDetector()
     coordinator = GestureCoordinator()          # 2-hand mode
     fallback_recognizer = GestureRecognizer()   # 1-hand fallback
-    controller = MouseController()
+
+    # --- Context-Aware Gestures: khoi tao an toan ---
+    context_manager = None
+    action_router   = None
+    if cfg.ENABLE_CONTEXT_AWARE and _CONTEXT_MODULES_OK:
+        try:
+            context_manager = ContextManager()
+            action_router   = ActionRouter(context_manager)
+            print("  Context-Aware Gestures: ON")
+        except Exception as _e:
+            print(f"  [WARN] Context-Aware init failed: {_e} — fallback legacy")
+            context_manager = None
+            action_router   = None
+    else:
+        if not cfg.ENABLE_CONTEXT_AWARE:
+            print("  Context-Aware Gestures: OFF (ENABLE_CONTEXT_AWARE=False)")
+
+    controller = MouseController(action_router=action_router)
 
     # --- Voice Input ---
     if cfg.ENABLE_VOICE_INPUT:
@@ -422,6 +528,10 @@ def main():
                 break
 
             frame = cv2.flip(frame, 1)
+
+            # --- Context-Aware: cap nhat context (co cache, khong block loop) ---
+            if context_manager is not None:
+                context_manager.update()
 
             # --- Detect ban tay ---
             frame = detector.find_hands(frame, draw=False)
@@ -841,6 +951,9 @@ def main():
 
             # --- Hotkey help ---
             draw_hotkey_help(frame, system_active)
+
+            # --- Context HUD (goc tren-phai) ---
+            draw_context_hud(frame, context_manager, controller)
 
             # --- Voice status overlay ---
             if cfg.ENABLE_VOICE_INPUT and cfg.VOICE_STATUS_DISPLAY:
