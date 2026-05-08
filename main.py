@@ -458,6 +458,27 @@ def main():
 
     controller = MouseController(action_router=action_router)
 
+    def _update_runtime_ctx():
+        """Cap nhat runtime context cho controller truoc khi dispatch gesture.
+
+        Dung duoc o moi nhanh (TWO_HAND / grace / fallback).
+        Boc try/except: khong bao gio crash camera loop.
+        "INIT" duoc chuan hoa thanh "ONE_HAND" de log khong chua gia tri noi bo.
+        """
+        try:
+            runtime_mode = current_mode if current_mode != "INIT" else "ONE_HAND"
+            controller.set_runtime_context(
+                mode=runtime_mode,
+                system_active=system_active,
+                fps=fps,
+                window_title=(
+                    context_manager.get_current_window_title()
+                    if context_manager is not None else ""
+                ),
+            )
+        except Exception:
+            pass
+
     # --- Gesture Logger ---
     gesture_logger = None
     if getattr(cfg, "ENABLE_GESTURE_LOGGING", False) and _LOGGER_MODULE_OK:
@@ -674,6 +695,9 @@ def main():
                 pri_g = primary_result.get("gesture", GESTURE_NONE)
                 sec_g = secondary_result.get("gesture", GESTURE_NONE)
 
+                # Cap nhat runtime context truoc khi dispatch
+                _update_runtime_ctx()
+
                 # Thuc thi secondary action (swipe, zoom)
                 # Chi dispatch cac gesture co action that, khong dispatch toggle/open_palm
                 if system_active and sec_g in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
@@ -760,6 +784,7 @@ def main():
                     if system_active and sec_gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
                                                           GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
                         print(f"[DISPATCH] Secondary (grace): {sec_gesture}")
+                        _update_runtime_ctx()  # Enrich log voi runtime data that
                         sec_action = {
                             "gesture": sec_gesture,
                             "cursor_pos": None,
@@ -842,6 +867,7 @@ def main():
                     if system_active and sec_gesture in (GESTURE_SWIPE_LEFT, GESTURE_SWIPE_RIGHT,
                                                           GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
                         print(f"[DISPATCH] Secondary (fallback): {sec_gesture}")
+                        _update_runtime_ctx()  # Enrich log voi runtime data that
                         sec_action = {
                             "gesture": sec_gesture,
                             "cursor_pos": None,

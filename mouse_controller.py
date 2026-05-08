@@ -59,6 +59,35 @@ class MouseController:
         # --- Gesture Logging (optional) ---
         self.event_logger = event_logger            # GestureLogger instance hoac None
 
+        # --- Runtime context (duoc cap nhat tu main loop moi frame) ---
+        self.runtime_mode: str = ""                 # "TWO_HAND" / "ONE_HAND" / ...
+        self.runtime_system_active: bool = False    # He thong dang ON/OFF
+        self.runtime_fps: float = 0.0               # FPS cua frame truoc
+        self.runtime_window_title: str = ""         # Tieu de cua so active
+
+    def set_runtime_context(
+        self,
+        mode: str = "",
+        system_active: bool = False,
+        fps: float = 0.0,
+        window_title: str = "",
+    ) -> None:
+        """Cap nhat runtime context cho lan log tiep theo.
+
+        Duoc goi tu main loop moi frame (truoc dispatch gesture).
+        Chi luu vao self, khong ghi log o day.
+
+        Args:
+            mode:          Che do hien tai ("TWO_HAND" / "ONE_HAND").
+            system_active: He thong ON (True) hay OFF (False).
+            fps:           FPS cua frame truoc.
+            window_title:  Tieu de cua so active lay tu ContextManager.
+        """
+        self.runtime_mode          = mode
+        self.runtime_system_active = system_active
+        self.runtime_fps           = fps
+        self.runtime_window_title  = window_title
+
     def process_gesture(self, gesture_result):
         """
         Xử lý gesture result — entry point chính.
@@ -396,10 +425,14 @@ class MouseController:
             if self.event_logger is not None:
                 try:
                     self.event_logger.log_event(
+                        mode=self.runtime_mode,
+                        system_active=self.runtime_system_active,
                         context=self.last_routed_context,
+                        window_title=self.runtime_window_title,
                         gesture=gesture_name,
                         action=action_name,
                         executed=bool(executed),
+                        fps=self.runtime_fps,
                         note="swipe",
                     )
                 except Exception:
@@ -445,10 +478,14 @@ class MouseController:
             if self.event_logger is not None:
                 try:
                     self.event_logger.log_event(
+                        mode=self.runtime_mode,
+                        system_active=self.runtime_system_active,
                         context=self.last_routed_context,
+                        window_title=self.runtime_window_title,
                         gesture="Zoom In",
                         action=action_name,
                         executed=bool(executed),
+                        fps=self.runtime_fps,
                         note="zoom",
                     )
                 except Exception:
@@ -469,10 +506,14 @@ class MouseController:
             if self.event_logger is not None:
                 try:
                     self.event_logger.log_event(
+                        mode=self.runtime_mode,
+                        system_active=self.runtime_system_active,
                         context=self.last_routed_context,
+                        window_title=self.runtime_window_title,
                         gesture="Zoom Out",
                         action=action_name,
                         executed=bool(executed),
+                        fps=self.runtime_fps,
                         note="zoom",
                     )
                 except Exception:
