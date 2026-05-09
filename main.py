@@ -599,6 +599,27 @@ def main():
         keyboard.add_hotkey(cfg.VOICE_HOTKEY, _on_voice_hotkey)
         print(f"  Voice Input: ON (hotkey: {cfg.VOICE_HOTKEY.upper()})")
 
+    # --- Gesture Voice Trigger helper (goi sau tung frame) ---
+    def _check_gesture_voice_trigger():
+        """Poll voice_trigger_fired tu secondary_recognizer va goi _on_voice_hotkey.
+
+        An toan khi ENABLE_VOICE_INPUT=False hoac voice chua init.
+        Goi sau toan bo dispatch moi frame de bat tat ca nhanh.
+        """
+        if not getattr(cfg, "ENABLE_GESTURE_VOICE_TRIGGER", False):
+            return
+        if not cfg.ENABLE_VOICE_INPUT:
+            return
+        rec = coordinator.secondary_recognizer
+        if not getattr(rec, "voice_trigger_fired", False):
+            return
+        rec.voice_trigger_fired = False  # reset ngay truoc khi goi
+        print("[GESTURE] Voice Trigger -> start voice input")
+        try:
+            _on_voice_hotkey()
+        except Exception as _vt_err:
+            print(f"[GESTURE] Voice Trigger callback error: {_vt_err}")
+
     # Track which mode is active
     is_two_hand_mode = False
 
@@ -1017,6 +1038,9 @@ def main():
                     frame, secondary_hand["bbox"],
                     sec_label, cfg.COLOR_SECONDARY_HAND
                 )
+
+            # --- Poll Gesture Voice Trigger (sau toan bo dispatch, moi nhanh) ---
+            _check_gesture_voice_trigger()
 
             # --- MODE DISPLAY (hien thi ro rang mode hien tai) ---
             font = cv2.FONT_HERSHEY_SIMPLEX

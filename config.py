@@ -350,3 +350,11 @@ GESTURE_LOG_DIR        = "logs" # Thu muc chua file log (tu tao neu chua co)
 ENABLE_VOICE_COMMANDS      = True  # True = kich hoat Voice Command Mode
 VOICE_COMMAND_DRY_RUN      = False # True = chi print, khong mo app/URL that
 VOICE_COMMAND_PRINT_RESULT = True  # True = in ket qua parse/execute ra console
+
+# ==============================================================================
+# Section 13: Gesture Voice Trigger (kich hoat Voice Input bang cu chi tay)
+# ==============================================================================
+ENABLE_GESTURE_VOICE_TRIGGER = True         # True = bat tinh nang nay
+VOICE_TRIGGER_POSE           = [0, 1, 1, 1, 0]  # cai cụp, tro/giua/ap-ut duoi, ut cụp
+VOICE_TRIGGER_HOLD_SECS      = 1.2          # Giay phai giu pose de trigger
+VOICE_TRIGGER_COOLDOWN       = 3.0          # Giay khong trigger lai sau khi fired
