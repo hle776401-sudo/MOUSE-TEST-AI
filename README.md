@@ -33,7 +33,9 @@ Hệ thống cho phép người dùng **điều khiển máy tính hoàn toàn b
 |---|---|
 | **Điều khiển chuột** | Move, Left Click, Double Click, Right Click, Drag & Drop, Scroll |
 | **Điều khiển hệ thống** | Swipe Next/Prev (slide/PDF/web), Zoom In/Out, System Toggle ON/OFF |
-| **Nhập liệu** | Voice Input → nhận diện giọng nói → gõ text vào ô đang focus |
+| **Nhập liệu giọng nói** | Voice Text Mode → paste text vào ô focus |
+| **Voice Command** | Voice Command Mode → thực thi lệnh từ whitelist (mở app, tìm kiếm...) |
+| **Gesture Voice Trigger** | Giữ pose tay trái 1.2s → kích hoạt Voice Input (không cần bàn phím) |
 
 ### Công nghệ sử dụng
 
@@ -53,17 +55,21 @@ Hệ thống cho phép người dùng **điều khiển máy tính hoàn toàn b
 
 ```
 MOUSE TEST AI/
-├── main.py                 Main loop + UI overlay + mode switching
-├── config.py               Tất cả hằng số và tham số cấu hình
-├── hand_tracking.py        MediaPipe wrapper — detect & extract hand data
-├── gesture_recognition.py  4 class nhận diện gesture (bao gồm Swipe V2)
-├── mouse_controller.py     Thực thi action qua PyAutoGUI + execute_action()
-├── context_manager.py      Detect active window → classify context [MỚI]
-├── action_router.py        Route (gesture, context) → action_name [MỚI]
-├── voice_input.py          STT module — mic → audio → text
-├── utils.py                Hàm tiện ích (distance, smooth, map, cooldown)
-├── test_handedness.py      Script test xác nhận mapping tay phải/trái
-└── requirements.txt        Danh sách dependencies
+├── main.py                     Main loop + UI overlay + mode switching
+├── config.py                   Tất cả hằng số và tham số cấu hình
+├── hand_tracking.py            MediaPipe wrapper — detect & extract hand data
+├── gesture_recognition.py      4 class nhận diện gesture (bao gồm Swipe V2 + Voice Trigger)
+├── mouse_controller.py         Thực thi action qua PyAutoGUI + execute_action()
+├── context_manager.py          Detect active window → classify context
+├── action_router.py            Route (gesture, context) → action_name
+├── voice_input.py              STT module — mic → audio → text
+├── voice_intent.py             Rule-based parser — text → intent dict [MỚI]
+├── voice_command_executor.py   Thực thi intent theo whitelist [MỚI]
+├── gesture_logger.py           Ghi log gesture event ra CSV
+├── analyze_logs.py             Phân tích file CSV log
+├── utils.py                    Hàm tiện ích (distance, smooth, map, cooldown)
+├── test_handedness.py          Script test xác nhận mapping tay phải/trái
+└── requirements.txt            Danh sách dependencies
 ```
 
 ### Mối quan hệ giữa các file
@@ -73,12 +79,14 @@ main.py
   ├── hand_tracking.py        → get_all_hands_data() mỗi frame
   ├── gesture_recognition.py  → coordinator.process() hoặc recognizer.recognize()
   │     ├── PrimaryHandRecognizer    (tay phải: chuột)
-  │     ├── SecondaryHandRecognizer  (tay trái: swipe V2/zoom/toggle)
+  │     ├── SecondaryHandRecognizer  (tay trái: swipe V2/zoom/toggle/voice trigger)
   │     └── GestureCoordinator       (điều phối 2 tay)
-  ├── context_manager.py      → update() + get_current_context() [MỚI]
-  ├── action_router.py        → resolve(gesture) → action_name [MỚI]
+  ├── context_manager.py      → update() + get_current_context()
+  ├── action_router.py        → resolve(gesture) → action_name
   ├── mouse_controller.py     → process_gesture(), execute_action(), type_text()
   ├── voice_input.py          → listen_and_recognize() (trong thread riêng)
+  ├── voice_intent.py         → VoiceIntentParser.parse(text) → intent dict [MỚI]
+  ├── voice_command_executor.py → VoiceCommandExecutor.execute(intent) [MỚI]
   └── config.py               → import ở tất cả các file
 ```
 
@@ -181,6 +189,7 @@ MediaPipe label "Left"  → Tay TRÁI người dùng → SECONDARY
 | Swipe Left/Right | ❌ | ✅ |
 | Zoom In/Out | ❌ | ✅ |
 | System Toggle | ❌ | ✅ |
+| Voice Trigger (hold pose) | ❌ | ✅ |
 
 ### Cơ chế enforcement (2 tầng)
 
@@ -336,58 +345,136 @@ camera (x,y) → clamp(ROI) → map(screen) → smooth() → deadzone check → 
 
 ## 7. Chức năng Voice Input
 
-### Flow tổng thể
+Hệ thống hỗ trợ **2 mode Voice Input** hoạt động tự động theo nội dung giọng nói:
+
+### 7.1 Voice Text Mode
+
+Nếu câu nói **không khớp** bất kỳ command nào trong whitelist → paste text bình thường vào ô đang focus.
 
 ```
-User click vào ô nhập (browser giữ focus)
-  ↓
-Nhấn Ctrl+Shift+V (global hotkey — không cần focus webcam)
-  ↓
-VOICE_LISTENING: Mic mở, chờ giọng nói (timeout 5s)
-  ↓
-VOICE_RECOGNIZING: Gửi audio lên Google Speech-to-Text
-  ↓
-VOICE_TYPING: Paste text vào ô đang focus bằng Windows Clipboard API
-  ↓
-VOICE_DONE: Hoàn thành (hoặc VOICE_ERROR nếu có lỗi)
+Ví dụ: "xin chào thầy cô" → paste "xin chào thầy cô" vào ô tìm kiếm/Google Docs...
 ```
 
-### State machine
+### 7.2 Voice Command Mode
+
+Nếu câu nói **khớp** command trong whitelist → thực thi lệnh (mở app, tìm kiếm, điều khiển hệ thống).
+
+**Whitelist command:**
+
+| Câu nói (tiếng Việt có dấu/không dấu) | Intent | Hành động |
+|---|---|---|
+| "mở youtube" / "mo youtube" | `open_youtube` | Mở https://www.youtube.com |
+| "mở nhạc `<query>`" / "mo nhac" | `open_music` | Mở YouTube search |
+| "mở bài hát `<query>`" | `open_music` | Mở YouTube search |
+| "tìm kiếm `<query>`" / "tim kiem" | `web_search` | Mở Google search |
+| "tra cứu `<query>`" / "tra cuu" | `web_search` | Mở Google search |
+| "mở word" / "mo word" | `open_word` | Mở Microsoft Word |
+| "mở chrome" / "mo chrome" | `open_chrome` | Mở Google Chrome |
+| "mở cốc cốc" / "mo coc coc" | `open_coccoc` | Mở Cốc Cốc (nếu cài) |
+| "bật hệ thống" / "bat he thong" | `system_on` | System ON |
+| "tắt hệ thống" / "tat he thong" | `system_off` | System OFF |
+| "bật điều khiển" / "bat dieu khien" | `system_on` | System ON |
+| "tắt điều khiển" / "tat dieu khien" | `system_off` | System OFF |
+
+> **Lưu ý an toàn:**
+> - Chỉ thực thi đúng command trong whitelist. Không chạy shell tự do.
+> - `open_music` / `web_search` bắt buộc phải có query — nếu không có → fallback text.
+> - Không tự click video đầu tiên YouTube. Không mở file tùy ý.
+
+**Kiến trúc Voice Command:**
 
 ```
-VOICE_IDLE ──[Ctrl+Alt+V]──► VOICE_LISTENING ──[im lặng > 5s]──► VOICE_ERROR
-                                      │
-                               [có giọng nói]
-                                      │
-                               VOICE_RECOGNIZING ──[lỗi mạng/STT]──► VOICE_ERROR
-                                      │
-                               [có text]
-                                      │
-                               VOICE_TYPING ──► VOICE_DONE
+voice_input.py  →  mic → audio → text (STT)
+     ↓
+voice_intent.py →  VoiceIntentParser.parse(text) → intent dict
+     ↓                (rule-based, không LLM/API, hỗ trợ có dấu/không dấu)
+ voice_command_executor.py → VoiceCommandExecutor.execute(intent)
+     ↓                       (whitelist dispatch, dry_run mode, safe callbacks)
+main.py         →  type_text() nếu text | execute_action nếu command
 ```
 
-### Tại sao không mất focus ô nhập?
+### 7.3 Gesture Voice Trigger
 
-**Giải pháp**: Dùng **Windows Clipboard API qua `ctypes`** (built-in Python):
-```
-GlobalAlloc → GlobalLock → memmove → GlobalUnlock
-OpenClipboard → SetClipboardData → CloseClipboard
-```
-Không tạo window → **browser giữ nguyên focus** → Ctrl+V paste đúng ô tìm kiếm.
+Ngoài `Ctrl+Alt+V`, có thể kích hoạt Voice Input bằng **cử chỉ tay trái**:
 
-### Cấu hình Voice Input
+| | |
+|---|---|
+| **Pose** | `[0, 1, 1, 1, 0]` — cái cụp, trỏ+giữa+áp út duỗi, út cụp |
+| **Hold time** | 1.2 giây |
+| **Cooldown** | 3.0 giây sau khi trigger |
+| **Điều kiện** | Chỉ hoạt động khi **System ON** |
+| **Xung đột** | Không trùng Swipe `[0,1,1,1,1]`, Zoom `[0,1,1,0,0]`, Toggle `[1,1,1,1,1]` |
+| **Fallback** | `Ctrl+Alt+V` vẫn hoạt động bất kể System ON/OFF |
+
+**Quy tắc System ON/OFF an toàn:**
+
+```
+System OFF:
+  ✅ System Toggle (5 ngón giữ 3s)    ← cách duy nhất thoát System OFF
+  ✅ Ctrl+Alt+V                        ← hotkey dự phòng luôn hoạt động
+  ❌ Move / Click / Drag / Scroll
+  ❌ Swipe / Zoom
+  ❌ Gesture Voice Trigger
+
+System ON:
+  ✅ Tất cả gesture đều hoạt động
+  ✅ Gesture Voice Trigger (pose 1.2s)
+  ✅ Ctrl+Alt+V
+```
+
+### 7.4 Flow tổng thể
+
+```
+User muốn dùng voice:
+  Cách 1: Nhấn Ctrl+Alt+V (mọi lúc)
+  Cách 2: Tay trái giữ pose [0,1,1,1,0] 1.2s (khi System ON)
+     ↓
+Mic mở → LISTENING (timeout 5s)
+     ↓
+Google STT → text
+     ↓
+VoiceIntentParser.parse(text)
+     ├── type = "command" → VoiceCommandExecutor.execute()
+     └── type = "text"   → controller.type_text() [paste vào ô focus]
+```
+
+### 7.5 State machine
+
+```
+VOICE_IDLE ──[Ctrl+Alt+V hoặc Gesture]──► VOICE_LISTENING ──[im lặng > 5s]──► VOICE_ERROR
+                                                   │
+                                             [có giọng nói]
+                                                   │
+                                           VOICE_RECOGNIZING ──[lỗi STT]──► VOICE_ERROR
+                                                   │
+                                             [có text]
+                                                   │
+                                     ┌─────────────┴─────────────┐
+                               [command match]             [không match]
+                                     │                           │
+                              execute_action()           type_text() + paste
+                                     │                           │
+                               VOICE_DONE                  VOICE_DONE
+```
+
+### 7.6 Cấu hình Voice Input
 
 | Config | Giá trị mặc định | Ý nghĩa |
 |---|---|---|
-| `ENABLE_VOICE_INPUT` | `True` | Bật/tắt chức năng |
+| `ENABLE_VOICE_INPUT` | `True` | Bật/tắt Voice Input |
 | `VOICE_HOTKEY` | `"ctrl+alt+v"` | Global hotkey kích hoạt |
-| `VOICE_LANGUAGE` | `"vi-VN"` | Ngôn ngữ STT (đổi `"en-US"` cho tiếng Anh) |
-| `VOICE_LISTEN_TIMEOUT` | `5` | Chờ tối đa 5s để bắt đầu nghe |
-| `VOICE_PHRASE_TIME_LIMIT` | `10` | Tối đa 10s cho 1 câu nói |
-| `VOICE_AUTO_ENTER` | `False` | Tự nhấn Enter sau khi gõ xong |
-| `VOICE_TYPING_SPEED` | `0.02` | Delay 20ms trước khi paste |
+| `VOICE_LANGUAGE` | `"vi-VN"` | Ngôn ngữ STT |
+| `VOICE_LISTEN_TIMEOUT` | `5` | Chờ tối đa 5s bắt đầu nghe |
+| `VOICE_PHRASE_TIME_LIMIT` | `30` | Tối đa 30s cho 1 câu nói |
+| `VOICE_AUTO_ENTER` | `False` | Tự Enter sau khi gõ (chỉ text mode) |
+| `ENABLE_VOICE_COMMANDS` | `True` | Bật Voice Command Mode |
+| `VOICE_COMMAND_DRY_RUN` | `False` | Test không mở app thật |
+| `ENABLE_GESTURE_VOICE_TRIGGER` | `True` | Bật Gesture Voice Trigger |
+| `VOICE_TRIGGER_POSE` | `[0,1,1,1,0]` | Pose tay kích hoạt |
+| `VOICE_TRIGGER_HOLD_SECS` | `1.2` | Thời gian giữ pose (giây) |
+| `VOICE_TRIGGER_COOLDOWN` | `3.0` | Cooldown sau khi trigger (giây) |
 
-### Xử lý lỗi
+### 7.7 Xử lý lỗi
 
 | Lỗi | Trạng thái | Thông báo |
 |---|---|---|
@@ -395,6 +482,7 @@ Không tạo window → **browser giữ nguyên focus** → Ctrl+V paste đúng 
 | Im lặng quá lâu | `VOICE_ERROR` | "Timeout: không nghe được giọng nói" |
 | Không nhận ra | `VOICE_ERROR` | "Không nhận ra giọng nói" |
 | Mất kết nối | `VOICE_ERROR` | "Lỗi kết nối STT" |
+| Command không mở được app | warning print | App không crash |
 
 > **Lưu ý**: Mọi lỗi đều được bắt — không crash chương trình chính. Gesture/cursor tiếp tục hoạt động bình thường.
 
@@ -408,7 +496,7 @@ Không tạo window → **browser giữ nguyên focus** → Ctrl+V paste đúng 
 | **PinchState Machine** | Click/Drag | `IDLE→PREPARING→HOLDING→DRAGGING` — unified flow tránh xung đột |
 | **Post-action Cooldown** | Tất cả event | 0.15s neutral gap sau mỗi gesture event |
 | **Click Freeze** | Cursor move | 100ms không di chuột sau click — chống run chuột sau click |
-| **Deadzone** | Cursor move | 3px — không moveTo() nếu tay gần như đứng yên |
+| **Deadzone** | Cursor move | 5px — không moveTo() nếu tay gần như đứng yên |
 | **Smoothing** | Cursor move | Nội suy tuyến tính factor 4 — mượt, không jitter |
 | **Frame Stability** | Zoom, Swipe | Phải liên tục N frame mới bắt đầu tracking |
 | **Delta Accumulator** | Zoom | Gom delta nhỏ nhiều frame thành 1 trigger ổn định |
@@ -508,6 +596,23 @@ ENABLE_VOICE_INPUT = True
 VOICE_HOTKEY = "ctrl+alt+v"
 VOICE_LANGUAGE = "vi-VN"
 VOICE_AUTO_ENTER = False
+```
+
+### Voice Command Mode
+
+```python
+ENABLE_VOICE_COMMANDS      = True   # Bật Voice Command Mode
+VOICE_COMMAND_DRY_RUN      = False  # True = chi print, khong mo app that
+VOICE_COMMAND_PRINT_RESULT = True   # In ket qua parse/execute ra console
+```
+
+### Gesture Voice Trigger
+
+```python
+ENABLE_GESTURE_VOICE_TRIGGER = True         # Bat tinh nang trigger bang cu chi
+VOICE_TRIGGER_POSE           = [0, 1, 1, 1, 0]  # Pose kich hoat
+VOICE_TRIGGER_HOLD_SECS      = 1.2          # Thoi gian giu pose (giay)
+VOICE_TRIGGER_COOLDOWN       = 3.0          # Cooldown sau trigger (giay)
 ```
 
 ---
@@ -670,6 +775,32 @@ keyboard
 - ✅ Toggle 5 ngón không xung đột Swipe V2
 - ✅ Zoom 2 ngón không xung đột Swipe V2
 - ✅ Move/click/drag/scroll/voice không bị ảnh hưởng
+
+---
+
+### Phase: Voice Command Mode + Gesture Voice Trigger — **COMPLETED** ✅
+*Tháng 5/2026*
+
+| File | Thay đổi |
+|---|---|
+| `config.py` | Append Section 12: Voice Command constants; Section 13: Gesture Voice Trigger constants |
+| `voice_intent.py` | [MỚI] VoiceIntentParser — rule-based, hỗ trợ tiếng Việt có/không dấu |
+| `voice_command_executor.py` | [MỚI] VoiceCommandExecutor — whitelist dispatch, dry_run, system callbacks |
+| `main.py` | Safe import, init parser/executor, nâng cấp `_voice_worker()`, `_check_gesture_voice_trigger()` |
+| `gesture_recognition.py` | Thêm `_check_voice_trigger()` vào `SecondaryHandRecognizer` |
+
+**Validation PASS:**
+- ✅ Ctrl+Alt+V vẫn hoạt động (hotkey dự phòng)
+- ✅ "mở youtube" → open_youtube
+- ✅ "mở nhạc Sơn Tùng MTP" → YouTube search giữ dấu
+- ✅ "tìm kiếm trí tuệ nhân tạo" → Google search
+- ✅ "mở word" → Microsoft Word hoặc warning nếu không tìm thấy
+- ✅ "xin chào thầy cô" → paste text (fallback text)
+- ✅ "mở word bài báo cáo" → paste text (không mở Word — exact-only)
+- ✅ Gesture Voice Trigger: giữ [0,1,1,1,0] 1.2s → voice bật
+- ✅ Gesture Voice Trigger KHÔNG hoạt động khi System OFF
+- ✅ Zoom / Swipe / Toggle không bị ảnh hưởng
+- ✅ Camera loop không crash
 
 ---
 
