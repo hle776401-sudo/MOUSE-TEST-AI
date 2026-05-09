@@ -557,3 +557,168 @@ Cử chỉ Swipe trong PowerPoint → để tay hướng vào camera
 ---
 
 *Tài liệu phản ánh trạng thái hệ thống tính đến tháng 5/2026.*
+
+---
+
+## PHẦN 12: ĐÁNH GIÁ THỰC NGHIỆM
+
+### 12.1 Mục tiêu đánh giá
+
+Phần này trình bày kết quả đánh giá thực nghiệm hệ thống AI Gesture Mouse Controller trong kịch bản điều khiển trình chiếu PowerPoint bằng cử chỉ tay. Mục tiêu bao gồm:
+
+- Xác nhận cơ chế Context-Aware Gestures định tuyến đúng hành động theo ứng dụng đang hoạt động.
+- Đánh giá tính ổn định của Swipe V2 State Machine và Zoom In/Out trong điều kiện sử dụng thực tế.
+- Ghi nhận tỉ lệ thực thi thành công của các cử chỉ thông qua module GestureLogger.
+- Phân tích phân phối context, gesture, action và chế độ hoạt động (TWO_HAND / ONE_HAND).
+
+> **Lưu ý:** Kết quả dưới đây phản ánh **một phiên thử nghiệm mẫu** thực hiện ngày 08/05/2026. Đây không phải đánh giá tuyệt đối cho toàn bộ hệ thống trong mọi điều kiện sử dụng.
+
+---
+
+### 12.2 Môi trường thử nghiệm
+
+| Thành phần | Chi tiết |
+|---|---|
+| Hệ điều hành | Windows 11 |
+| Python | 3.10 |
+| Webcam | Webcam tích hợp laptop |
+| Độ phân giải camera | 640 × 480 |
+| Ứng dụng kiểm thử | Microsoft PowerPoint (file .pptx) |
+| Ánh sáng | Trong phòng, ánh sáng tự nhiên ban ngày |
+| Khoảng cách tay–camera | ~50–70 cm |
+| FPS trung bình | 16.1 FPS |
+| Công cụ ghi log | `gesture_logger.py` + `analyze_logs.py` |
+
+---
+
+### 12.3 Kịch bản thử nghiệm
+
+Người thử nghiệm thực hiện các thao tác sau **bằng tay trái (Secondary Hand)**:
+
+1. **Swipe Right** → chuyển slide tiếp theo (`next_slide`)
+2. **Swipe Left** → quay lại slide trước (`previous_slide`)
+3. **Zoom In / Zoom Out** → phóng to / thu nhỏ slide trong PowerPoint (`presentation_zoom_in` / `presentation_zoom_out`)
+
+Trong suốt quá trình, cửa sổ active được duy trì ở PowerPoint. Một số event ghi nhận context `default` xảy ra khi cửa sổ active tạm thời chuyển sang `AI Mouse Controller` (cửa sổ webcam) — đây là hành vi bình thường và được ghi nhận đúng.
+
+Thử nghiệm bao gồm cả 2 chế độ:
+- **ONE_HAND**: chỉ dùng tay trái đơn (chế độ fallback)
+- **TWO_HAND**: dùng cả hai tay đồng thời
+
+---
+
+### 12.4 Công cụ ghi log
+
+Hệ thống sử dụng module `gesture_logger.py` (Bước 6.1–6.4) để ghi sự kiện ra file CSV theo thời gian thực. Mỗi sự kiện bao gồm:
+
+```
+timestamp, mode, system_active, context, window_title,
+gesture, action, executed, fps, note
+```
+
+File log được đặt tên theo ngày/giờ: `logs/gesture_events_YYYYMMDD_HHMMSS.csv`.
+
+Phân tích kết quả thực hiện bằng `analyze_logs.py` (built-in Python, không có dependency ngoài).
+
+---
+
+### 12.5 Kết quả thống kê từ log
+
+**Tổng quan phiên thử nghiệm:**
+
+| Chỉ số | Giá trị |
+|---|---|
+| Tổng số sự kiện ghi nhận | 58 |
+| Thực thi thành công | 58 |
+| Thực thi thất bại | 0 |
+| Tỉ lệ thành công (phiên test mẫu) | **100.0%** |
+| FPS trung bình | **16.1 FPS** |
+| Khoảng thời gian | 10:47:14 → 10:48:38 (≈ 84 giây) |
+
+**Phân phối theo gesture:**
+
+| Gesture | Số lần | Tỉ lệ |
+|---|---|---|
+| Swipe Left | 18 | 31.0% |
+| Zoom In | 16 | 27.6% |
+| Swipe Right | 13 | 22.4% |
+| Zoom Out | 11 | 19.0% |
+| **Tổng** | **58** | **100%** |
+
+**Phân phối theo context:**
+
+| Context | Số lần | Tỉ lệ |
+|---|---|---|
+| presentation | 53 | 91.4% |
+| default | 5 | 8.6% |
+| **Tổng** | **58** | **100%** |
+
+**Phân phối theo action:**
+
+| Action | Số lần | Tỉ lệ |
+|---|---|---|
+| previous_slide | 18 | 31.0% |
+| presentation_zoom_in | 13 | 22.4% |
+| next_slide | 13 | 22.4% |
+| presentation_zoom_out | 9 | 15.5% |
+| default_zoom_in | 3 | 5.2% |
+| default_zoom_out | 2 | 3.4% |
+| **Tổng** | **58** | **100%** |
+
+**Phân phối theo chế độ hoạt động:**
+
+| Chế độ | Số lần | Tỉ lệ |
+|---|---|---|
+| ONE_HAND (tay trái đơn) | 46 | 79.3% |
+| TWO_HAND (hai tay) | 12 | 20.7% |
+
+**Cửa sổ được ghi nhận (2 unique):**
+- `Slide 1 - Software testing overview.pptx - PowerPoint`
+- `AI Mouse Controller`
+
+---
+
+### 12.6 Nhận xét kết quả
+
+**Định tuyến context chính xác:**
+Trong 53/58 sự kiện (91.4%), hệ thống xác định đúng context `presentation` và định tuyến Swipe/Zoom sang slide control. 5 sự kiện còn lại (8.6%) ghi nhận context `default` khi cửa sổ active tạm thời là `AI Mouse Controller` — đây là hành vi đúng của hệ thống vì không có context keyword phù hợp với tên cửa sổ webcam.
+
+**Cơ chế Sticky Context hoạt động hiệu quả:**
+Cơ chế giữ context 2 giây giúp phần lớn thao tác Swipe/Zoom ngay sau khi nhìn vào camera vẫn sử dụng đúng context `presentation`, giảm thiểu routing về `default`.
+
+**Swipe V2 State Machine ổn định:**
+Trong 31 sự kiện swipe được ghi nhận, tất cả đều được thực thi thành công (executed=1). Không có sự kiện nào bị kẹt hoặc nhận diện sai hướng trong phiên thử nghiệm này.
+
+**Zoom In/Out định tuyến đúng:**
+27 sự kiện zoom được ghi nhận. Context `presentation` sử dụng `Ctrl+` / `Ctrl-` để phóng to/thu nhỏ slide PowerPoint. Context `default` sử dụng zoom toàn cục.
+
+**Chế độ ONE_HAND chiếm ưu thế:**
+79.3% sự kiện xảy ra khi chỉ có tay trái (tay phải không vào frame). Hệ thống xử lý đúng theo nhánh ONE_HAND fallback mà không mất context hay gesture routing.
+
+---
+
+### 12.7 Hạn chế
+
+1. **Phiên test hạn chế:** Kết quả dựa trên 1 phiên thử nghiệm (~84 giây, 1 người dùng). Chưa đủ để kết luận về hiệu năng trong mọi điều kiện ánh sáng, khoảng cách và góc máy.
+
+2. **FPS thấp (16.1 FPS):** Thấp hơn target 30 FPS. Nguyên nhân có thể do tải xử lý MediaPipe + Context detection + Camera loop chạy đồng thời trên cùng một luồng. FPS thấp có thể ảnh hưởng đến độ nhạy của Swipe V2.
+
+3. **5 sự kiện default không mong muốn:** Khi người dùng nhìn vào camera để kiểm tra frame, cửa sổ active thay đổi về `AI Mouse Controller`, dẫn đến context `default`. Sticky 2s giảm thiểu nhưng chưa loại bỏ hoàn toàn.
+
+4. **Chỉ kiểm thử kịch bản PowerPoint:** Chưa thực hiện thử nghiệm ghi log đầy đủ trên các context khác (browser, document, media).
+
+5. **Log chưa ghi Click/Drag/Scroll:** Ở giai đoạn hiện tại, chỉ Swipe và Zoom được ghi log. Click, Drag, Scroll của tay phải chưa được đưa vào CSV để phân tích.
+
+---
+
+### 12.8 Hướng cải tiến
+
+| # | Hướng cải tiến | Mức độ ưu tiên |
+|---|---|---|
+| 1 | Mở rộng kiểm thử sang các context: browser, document, media | Cao |
+| 2 | Tối ưu FPS: chạy context detection trong thread riêng | Cao |
+| 3 | Bổ sung log cho Click, Double Click, Drag End, Scroll | Trung bình |
+| 4 | Tích hợp Confidence Score từ MediaPipe vào CSV | Trung bình |
+| 5 | Thực hiện nhiều phiên test (≥ 5 phiên, ≥ 3 người dùng) để đánh giá khách quan | Cao |
+| 6 | Phân tích gesture latency (thời gian từ detect → execute) | Thấp |
+| 7 | Xuất báo cáo Excel từ analyze_logs.py | Thấp |
