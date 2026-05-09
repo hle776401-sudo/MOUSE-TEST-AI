@@ -120,7 +120,7 @@ new_position = current + (target - current) / factor
 
 Với `factor = 4`: mỗi frame, con trỏ chỉ di 25% khoảng cách còn lại đến vị trí đích. Kết quả: chuyển động mượt, không giật, nhưng vẫn phản hồi kịp thời.
 
-**Deadzone (3px)**: Nếu vị trí mới cách vị trí cũ < 3px → không di chuyển. Loại bỏ micro-jitter khi tay đứng yên.
+**Deadzone (5px)**: Nếu vị trí mới cách vị trí cũ < 5px → không di chuyển. Loại bỏ micro-jitter khi tay đứng yên.
 
 ---
 
@@ -138,6 +138,10 @@ MOUSE TEST AI/
 ├── context_manager.py       ← [MỚI] Detect active window, classify context
 ├── action_router.py         ← [MỚI] Route (gesture, context) → action_name
 ├── voice_input.py           ← Speech-to-Text module
+├── voice_intent.py          ← [MỚI] Rule-based intent parser
+├── voice_command_executor.py ← [MỚI] Thực thi command theo whitelist
+├── gesture_logger.py        ← [MỚI] Ghi log gesture event ra CSV
+├── analyze_logs.py          ← [MỚI] Phân tích file CSV log
 ├── main.py                  ← Vòng lặp chính + Context HUD + UI overlay
 ├── test_handedness.py       ← Script test xác nhận tay phải/trái
 └── requirements.txt         ← Dependencies
@@ -468,7 +472,7 @@ voice_input.py
 |---|---|
 | Q | Thoát chương trình |
 | S | Toggle System ON/OFF nhanh |
-| Ctrl+Shift+V | Bật Voice Input (global, không cần focus webcam) |
+| Ctrl+Alt+V | Bật Voice Input (global, không cần focus webcam) |
 
 ---
 
@@ -722,3 +726,200 @@ Trong 31 sự kiện swipe được ghi nhận, tất cả đều được thự
 | 5 | Thực hiện nhiều phiên test (≥ 5 phiên, ≥ 3 người dùng) để đánh giá khách quan | Cao |
 | 6 | Phân tích gesture latency (thời gian từ detect → execute) | Thấp |
 | 7 | Xuất báo cáo Excel từ analyze_logs.py | Thấp |
+
+---
+
+## PHẦN 13: VOICE COMMAND MODE VÀ GESTURE VOICE TRIGGER
+
+### 13.1 Mục tiêu và định vị
+
+Voice Command Mode và Gesture Voice Trigger là **tính năng mở rộng phụ trợ** bổ sung cho hệ thống điều khiển bằng cử chỉ tay. Mục tiêu:
+
+- Cho phép người dùng ra lệnh bằng giọng nói để thực thi các thao tác thường dùng (mở ứng dụng, tìm kiếm...).
+- Cho phép kích hoạt Voice Input bằng cử chỉ tay thay vì bàn phím.
+- **Không thay thế** trọng tâm chính của đề tài là nhận diện cử chỉ tay.
+
+> **Lưu ý:** Đây là tính năng phụ, được thiết kế để không ảnh hưởng đến pipeline gesture chính. Mọi lỗi của Voice Command đều được catch nội bộ — gesture và camera loop tiếp tục hoạt động bình thường.
+
+---
+
+### 13.2 Kiến trúc Voice Command Mode
+
+```
+voice_input.py          → mic → audio → Google STT → text (blocking, thread riêng)
+     ↓
+voice_intent.py         → VoiceIntentParser.parse(text) → intent dict
+     ↓                     (rule-based, không LLM/API, hỗ trợ có dấu/không dấu)
+voice_command_executor.py → VoiceCommandExecutor.execute(intent dict)
+     ↓                     (whitelist dispatch, dry_run mode, safe subprocess)
+main.py                 → type_text() nếu text | execute intent nếu command
+```
+
+**Mô tả từng module:**
+
+| Module | Class | Nhiệm vụ |
+|---|---|---|
+| `voice_input.py` | `VoiceInputManager` | STT: mic → audio → Google STT → text |
+| `voice_intent.py` | `VoiceIntentParser` | Parse text → intent dict (rule-based) |
+| `voice_command_executor.py` | `VoiceCommandExecutor` | Thực thi intent theo whitelist |
+
+---
+
+### 13.3 Voice Text Mode vs Voice Command Mode
+
+Hệ thống tự động phân loại câu nói mà không cần người dùng chọn mode:
+
+| | Voice Text Mode | Voice Command Mode |
+|---|---|---|
+| **Kích hoạt khi** | Câu nói không khớp whitelist | Câu nói khớp command whitelist |
+| **Hành động** | Paste text vào ô focus | Thực thi command (mở app, tìm kiếm...) |
+| **Ví dụ** | "xin chào thầy cô" → paste | "mở youtube" → webbrowser.open() |
+| **VOICE_AUTO_ENTER** | Có hiệu lực | Không áp dụng |
+
+---
+
+### 13.4 Bảng command whitelist (voice_intent.py)
+
+| Câu nói mẫu (có dấu / không dấu) | Intent | Hành động |
+|---|---|---|
+| "mở youtube" / "mo youtube" | `open_youtube` | Mở https://www.youtube.com |
+| "mở nhạc `<query>`" / "mo nhac `<query>`" | `open_music` | YouTube search (giữ dấu) |
+| "mở bài hát `<query>`" | `open_music` | YouTube search |
+| "tìm kiếm `<query>`" / "tim kiem `<query>`" | `web_search` | Google search |
+| "tra cứu `<query>`" / "tra cuu `<query>`" | `web_search` | Google search |
+| "mở word" / "mo word" | `open_word` | Mở Microsoft Word |
+| "mở chrome" / "mo chrome" | `open_chrome` | Mở Google Chrome |
+| "mở cốc cốc" / "mo coc coc" | `open_coccoc` | Mở Cốc Cốc (nếu cài) |
+| "bật hệ thống" / "bat he thong" | `system_on` | System ON (callback) |
+| "tắt hệ thống" / "tat he thong" | `system_off` | System OFF (callback) |
+| "bật điều khiển" / "bat dieu khien" | `system_on` | System ON |
+| "tắt điều khiển" / "tat dieu khien" | `system_off` | System OFF |
+
+**Quy tắc parser (normalize_text):**
+1. Lowercase + strip khoảng trắng.
+2. Chuyển `đ` → `d` (NFD không xử lý được ký tự này).
+3. NFD decompose → loại bỏ Combining Marks → bỏ dấu.
+4. So khớp với prefix/exact pattern.
+
+**Quy tắc an toàn whitelist:**
+- `open_music` / `web_search` bắt buộc phải có query → nếu không có, fallback text.
+- Command không cần query (open_word, open_chrome...) phải **exact match** → không prefix match → tránh nhầm "mở word bài báo cáo" thành open_word.
+
+---
+
+### 13.5 Gesture Voice Trigger
+
+**Mục đích:** Kích hoạt Voice Input bằng cử chỉ tay trái — không cần bàn phím.
+
+**Thiết kế:**
+
+| Thuộc tính | Giá trị |
+|---|---|
+| Tay sử dụng | Tay trái (Secondary Hand) |
+| Pose | `[0, 1, 1, 1, 0]` — cái cụp, trỏ/giữa/áp út duỗi, út cụp |
+| Hold time | 1.2 giây |
+| Cooldown | 3.0 giây |
+| Điều kiện | **Chỉ khi system_active = True** |
+| Hotkey dự phòng | `Ctrl+Alt+V` (luôn hoạt động) |
+
+**Phân tích xung đột với các gesture khác:**
+
+| Gesture khác | Pose | Trùng [0,1,1,1,0]? |
+|---|---|---|
+| System Toggle | `[1,1,1,1,1]` | ❌ Không |
+| Swipe V2 | `[0,1,1,1,1]` + movement | ❌ Không |
+| Zoom | `[0,1,1,0,0]` + pinch | ❌ Không |
+
+→ Pose `[0,1,1,1,0]` an toàn, không xung đột.
+
+**Cài đặt trong `SecondaryHandRecognizer`:**
+
+```python
+# __init__():
+self._vtrigger_start_time: float = 0.0
+self._vtrigger_active: bool = False
+self._vtrigger_cooldown_time: float = 0.0
+self.voice_trigger_fired: bool = False  # main.py poll và reset
+
+# recognize() — sau system-OFF block, trước Zoom/Swipe:
+if ENABLE_GESTURE_VOICE_TRIGGER:
+    self._check_voice_trigger(fingers, now)
+```
+
+**Cơ chế poll trong `main.py`:**
+
+```python
+def _check_gesture_voice_trigger():
+    rec = coordinator.secondary_recognizer
+    if rec.voice_trigger_fired:
+        rec.voice_trigger_fired = False  # reset ngay
+        _on_voice_hotkey()               # gọi lại logic voice hiện tại
+```
+
+Gọi 1 lần/frame, sau khi tất cả nhánh dispatch (TWO_HAND / grace / fallback) đã chạy.
+
+---
+
+### 13.6 Quy tắc System ON/OFF an toàn
+
+```
+System OFF (trạng thái khởi động mặc định):
+  ✅ System Toggle (5 ngón giữ ≥ 3s)    ← cách duy nhất thoát System OFF bằng gesture
+  ✅ Ctrl+Alt+V                          ← hotkey dự phòng luôn hoạt động
+  ❌ Move / Click / Drag / Scroll        ← bị chặn
+  ❌ Swipe / Zoom                        ← bị chặn
+  ❌ Gesture Voice Trigger               ← bị chặn (chỉ hoạt động khi System ON)
+
+System ON:
+  ✅ Tất cả gesture hoạt động
+  ✅ Gesture Voice Trigger (hold 1.2s)
+  ✅ Ctrl+Alt+V
+```
+
+**Lý do:** System OFF là "trạng thái an toàn". Chỉ nhận đúng 1 cử chỉ Toggle để bật hệ thống. Điều này tránh kích hoạt nhầm khi người dùng vô tình giơ tay.
+
+---
+
+### 13.7 Checklist test đã PASS
+
+| Test case | Kết quả |
+|---|---|
+| Ctrl+Alt+V bật voice | ✅ PASS |
+| "mở youtube" → open_youtube | ✅ PASS |
+| "mở nhạc Sơn Tùng MTP" → YouTube search (giữ dấu query) | ✅ PASS |
+| "tìm kiếm trí tuệ nhân tạo" → Google search | ✅ PASS |
+| "mở word" → Microsoft Word | ✅ PASS |
+| "xin chào thầy cô" → paste text (fallback) | ✅ PASS |
+| "mở word bài báo cáo" → paste text (không mở Word) | ✅ PASS |
+| "bật hệ thống" → system_on callback | ✅ PASS |
+| "tắt hệ thống" → system_off callback | ✅ PASS |
+| Tay trái giữ [0,1,1,1,0] < 1.2s → không trigger | ✅ PASS |
+| Tay trái giữ [0,1,1,1,0] ≥ 1.2s → voice bật | ✅ PASS |
+| Gesture Voice Trigger khi System OFF → không trigger | ✅ PASS |
+| Gesture Voice Trigger sau trigger → cooldown 3s | ✅ PASS |
+| Zoom 2 ngón vẫn hoạt động | ✅ PASS |
+| Swipe 4 ngón vẫn hoạt động | ✅ PASS |
+| Toggle 5 ngón vẫn hoạt động cả ON/OFF | ✅ PASS |
+| Camera loop không crash | ✅ PASS |
+
+---
+
+### 13.8 Hạn chế
+
+1. **STT phụ thuộc vào chất lượng mic và kết nối mạng.** Google STT có thể nhận sai tiếng Việt có dấu, đặc biệt với tên riêng (ví dụ: "Sơn Tùng" có thể nhận thành "Sơn Tùng" hoặc "son tung"). Hệ thống đã xử lý cả dạng có dấu và không dấu.
+
+2. **Command giới hạn trong whitelist.** Chỉ thực thi đúng các intent đã định nghĩa. Người dùng không thể tự do yêu cầu mở file, chạy lệnh shell, hoặc điều khiển ngoài whitelist.
+
+3. **Không tự click video đầu tiên YouTube.** `open_music` chỉ mở trang search — người dùng tự chọn video.
+
+4. **Không mở file tùy ý.** Không có intent nào cho phép mở file path từ giọng nói — tránh rủi ro bảo mật.
+
+5. **Gesture Voice Trigger chỉ hoạt động khi System ON.** Người dùng phải bật hệ thống bằng Toggle 5 ngón hoặc dùng Ctrl+Alt+V nếu system đang OFF.
+
+6. **Chưa có visual progress khi giữ pose Voice Trigger.** MVP chỉ có terminal log. Có thể bổ sung progress bar sau.
+
+7. **Chưa test đa ngôn ngữ.** Hiện chỉ test tiếng Việt (`vi-VN`). Tiếng Anh có thể dùng bằng cách đổi `VOICE_LANGUAGE = "en-US"`.
+
+---
+
+*Tài liệu phản ánh trạng thái hệ thống tính đến tháng 5/2026.*
