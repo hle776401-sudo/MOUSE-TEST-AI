@@ -343,3 +343,10 @@ CONTEXT_MEDIA_KEYWORDS = [
 # ==============================================================================
 ENABLE_GESTURE_LOGGING = True   # True = ghi log ra CSV; False = tat hoan toan
 GESTURE_LOG_DIR        = "logs" # Thu muc chua file log (tu tao neu chua co)
+
+# ==============================================================================
+# Section 12: Voice Command Mode (MVP)
+# ==============================================================================
+ENABLE_VOICE_COMMANDS      = True  # True = kich hoat Voice Command Mode
+VOICE_COMMAND_DRY_RUN      = False # True = chi print, khong mo app/URL that
+VOICE_COMMAND_PRINT_RESULT = True  # True = in ket qua parse/execute ra console

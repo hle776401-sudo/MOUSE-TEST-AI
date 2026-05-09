@@ -58,6 +58,15 @@ except Exception as _log_import_err:
     print(f"[WARN] GestureLogger import failed: {_log_import_err}")
     _LOGGER_MODULE_OK = False
 
+# --- Voice Command Mode: safe import ---
+try:
+    from voice_intent import VoiceIntentParser
+    from voice_command_executor import VoiceCommandExecutor
+    _VOICE_CMD_MODULES_OK = True
+except Exception as _vcmd_import_err:
+    print(f"[WARN] Voice Command modules import failed: {_vcmd_import_err}")
+    _VOICE_CMD_MODULES_OK = False
+
 if cfg.ENABLE_VOICE_INPUT:
     import keyboard
     from voice_input import VoiceInputManager, VoiceState
@@ -492,6 +501,39 @@ def main():
             print(f"  [WARN] GestureLogger init failed: {_log_init_err} -- logging disabled")
             gesture_logger = None
 
+    # --- Voice Command Mode ---
+    voice_intent_parser   = None
+    voice_cmd_executor    = None
+    _voice_cmd_active     = (
+        cfg.ENABLE_VOICE_INPUT
+        and getattr(cfg, "ENABLE_VOICE_COMMANDS", False)
+        and _VOICE_CMD_MODULES_OK
+    )
+
+    if _voice_cmd_active:
+        try:
+            def _voice_system_on():
+                coordinator.system_active = True
+                print("[VOICE_CMD] System ON via voice command")
+
+            def _voice_system_off():
+                coordinator.system_active = False
+                if controller.is_dragging:
+                    controller.drag_end()
+                print("[VOICE_CMD] System OFF via voice command")
+
+            voice_intent_parser = VoiceIntentParser()
+            voice_cmd_executor  = VoiceCommandExecutor(
+                dry_run=getattr(cfg, "VOICE_COMMAND_DRY_RUN", False),
+                system_on_callback=_voice_system_on,
+                system_off_callback=_voice_system_off,
+            )
+        except Exception as _vcmd_init_err:
+            print(f"  [WARN] Voice Command init failed: {_vcmd_init_err} -- disabled")
+            voice_intent_parser = None
+            voice_cmd_executor  = None
+            _voice_cmd_active   = False
+
     # --- Voice Input ---
     if cfg.ENABLE_VOICE_INPUT:
         voice_manager = VoiceInputManager()
@@ -514,13 +556,37 @@ def main():
                 nonlocal voice_state, voice_result_text
                 result = voice_manager.listen_and_recognize()
                 if result["state"] == VoiceState.DONE:
-                    voice_result_text = result["text"]
+                    raw_text = result["text"]
+                    voice_result_text = raw_text
                     voice_state = VoiceState.TYPING
-                    controller.type_text(result["text"])
-                    if cfg.VOICE_AUTO_ENTER:
-                        time.sleep(0.5)
-                        controller.press_enter()
-                        print("[VOICE] Auto Enter")
+
+                    # --- Voice Command routing ---
+                    _handled_as_command = False
+                    if _voice_cmd_active and voice_intent_parser is not None and voice_cmd_executor is not None:
+                        try:
+                            intent = voice_intent_parser.parse(raw_text)
+                            if getattr(cfg, "VOICE_COMMAND_PRINT_RESULT", True):
+                                print(f"[VOICE_CMD] Parse: type={intent['type']} intent={intent['intent']}")
+
+                            if intent["type"] == "command":
+                                ok = voice_cmd_executor.execute(intent)
+                                if ok:
+                                    print(f"[VOICE_CMD] Executed: {intent['intent']}")
+                                else:
+                                    print(f"[VOICE_CMD] Failed/skipped: {intent['intent']}")
+                                voice_result_text = f"CMD: {intent['intent']}"
+                                _handled_as_command = True
+                        except Exception as _vcmd_err:
+                            print(f"[VOICE_CMD] Error: {_vcmd_err} -- fallback to text")
+
+                    # --- Text mode (fallback hoac khong co command mode) ---
+                    if not _handled_as_command:
+                        controller.type_text(raw_text)
+                        if cfg.VOICE_AUTO_ENTER:
+                            time.sleep(0.5)
+                            controller.press_enter()
+                            print("[VOICE] Auto Enter")
+
                     voice_state = VoiceState.DONE
                 else:
                     voice_result_text = ""
@@ -560,6 +626,12 @@ def main():
         print(f"  Gesture Log: {gesture_logger.get_log_path()}")
     else:
         print(f"  Gesture Log: OFF")
+    if cfg.ENABLE_VOICE_INPUT:
+        if _voice_cmd_active:
+            dry_tag = "  [DRY_RUN]" if getattr(cfg, "VOICE_COMMAND_DRY_RUN", False) else ""
+            print(f"  Voice Commands: ON{dry_tag}")
+        else:
+            print(f"  Voice Commands: OFF")
     print(f"  System: OFF (hold 5 fingers on secondary hand 3s to enable)")
     print("=" * 50)
     print("  Press 'q' to quit | 's' to toggle control")
