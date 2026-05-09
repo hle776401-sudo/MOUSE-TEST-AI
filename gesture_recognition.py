@@ -1062,6 +1062,12 @@ class SecondaryHandRecognizer:
         self._prev_hand_center = None
         self.current_gesture = GESTURE_NONE
 
+        # --- Voice Trigger ---
+        self._vtrigger_start_time: float = 0.0
+        self._vtrigger_active: bool = False
+        self._vtrigger_cooldown_time: float = 0.0
+        self.voice_trigger_fired: bool = False  # main.py poll va reset flag nay
+
     def recognize(self, landmark_list, fingers, palm_size=0, hand_center=None):
         """
         Nhan dien gesture cho Secondary hand.
@@ -1094,10 +1100,15 @@ class SecondaryHandRecognizer:
         if not self.system_active:
             if sum(fingers) == 5:
                 result["gesture"] = GESTURE_OPEN_PALM
-            self._reset_states()
+            self._reset_states()   # reset _vtrigger_active/_start_time luon trong day
             self.current_gesture = result["gesture"]
             self._prev_hand_center = hand_center
             return result
+
+        # --- VOICE TRIGGER (chi khi system ON) ---
+        # _reset_states() phia tren da clear active/start_time khi system OFF.
+        if getattr(cfg, "ENABLE_GESTURE_VOICE_TRIGGER", False):
+            self._check_voice_trigger(fingers, now)
 
         # Post-action cooldown
         if not cooldown_passed(self._post_action_time,
@@ -1136,6 +1147,52 @@ class SecondaryHandRecognizer:
         self.current_gesture = GESTURE_NONE
         self._prev_hand_center = hand_center
         return result
+
+    # --- Voice Trigger ---
+    def _check_voice_trigger(self, fingers, now) -> bool:
+        """Kiem tra pose [VOICE_TRIGGER_POSE] giu VOICE_TRIGGER_HOLD_SECS.
+
+        Side-effect: set self.voice_trigger_fired = True khi triggered.
+        Khong return gesture, khong chiem pipeline.
+
+        Args:
+            fingers: List 5 gia tri [0/1] cho cac ngon tay.
+            now:     time.time() hien tai.
+
+        Returns:
+            True frame triggered, False cac truong hop con lai.
+        """
+        pose = getattr(cfg, "VOICE_TRIGGER_POSE", [0, 1, 1, 1, 0])
+        hold = getattr(cfg, "VOICE_TRIGGER_HOLD_SECS", 1.2)
+        cooldown = getattr(cfg, "VOICE_TRIGGER_COOLDOWN", 3.0)
+
+        # Kiem tra pose co khop khong
+        if list(fingers) != list(pose):
+            # Mat pose -> reset active, giu cooldown
+            self._vtrigger_active = False
+            self._vtrigger_start_time = 0.0
+            return False
+
+        # Dang trong cooldown
+        if not cooldown_passed(self._vtrigger_cooldown_time, cooldown, now):
+            return False
+
+        # Pose khop, chua active -> bat dau dem
+        if not self._vtrigger_active:
+            self._vtrigger_start_time = now
+            self._vtrigger_active = True
+            return False
+
+        # Kiem tra da giu du thoi gian chua
+        elapsed = now - self._vtrigger_start_time
+        if elapsed >= hold:
+            self._vtrigger_active = False
+            self._vtrigger_cooldown_time = now
+            self.voice_trigger_fired = True   # main.py se doc va reset
+            print("[GESTURE] Voice Trigger fired (hold %.2fs)" % elapsed)
+            return True
+
+        return False
 
     # --- Toggle (copy tu GestureRecognizer) ---
     def _check_system_toggle(self, fingers, hand_center, now):
@@ -1566,6 +1623,9 @@ class SecondaryHandRecognizer:
         self._zoom_delta_acc = 0
         self._zoom_frame_count = 0
         self.current_gesture = GESTURE_NONE
+        # Voice Trigger: reset active/start_time, KHONG reset cooldown/voice_trigger_fired
+        self._vtrigger_active = False
+        self._vtrigger_start_time = 0.0
 
 
 # ==============================================================================
