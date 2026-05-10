@@ -558,9 +558,6 @@ Cử chỉ Swipe trong PowerPoint → để tay hướng vào camera
 | Voice Ctrl+Alt+V | ✅ PASS |
 | Gemini Pro High review | ✅ PASS (no critical/high/medium bug) |
 
----
-
-*Tài liệu phản ánh trạng thái hệ thống tính đến tháng 5/2026.*
 
 ---
 
@@ -919,6 +916,128 @@ System ON:
 6. **Chưa có visual progress khi giữ pose Voice Trigger.** MVP chỉ có terminal log. Có thể bổ sung progress bar sau.
 
 7. **Chưa test đa ngôn ngữ.** Hiện chỉ test tiếng Việt (`vi-VN`). Tiếng Anh có thể dùng bằng cách đổi `VOICE_LANGUAGE = "en-US"`.
+
+---
+
+*Tài liệu phản ánh trạng thái hệ thống tính đến tháng 5/2026.*
+
+---
+
+## PHẦN 14: GUI DESKTOP CONTROL PANEL
+
+### 14.1 Định vị trong kiến trúc hệ thống
+
+GUI Desktop Control Panel (`app_gui.py`) là **lớp giao diện bổ trợ** nằm ngoài pipeline xử lý thời gian thực. GUI **không thay thế** và **không can thiệp** vào `main.py`.
+
+```
+┌────────────────────────────────────────────────────┐
+│               app_gui.py  (GUI Layer)              │
+│  CustomTkinter window — Desktop Control Panel      │
+│                                                    │
+│  subprocess.Popen([python, main.py])               │
+│       │                                            │
+│       ▼                                            │
+│  ┌─────────────────────────────────────────────┐   │
+│  │           main.py  (Core Process)          │   │
+│  │  Camera → MediaPipe → Gesture → Action     │   │
+│  │  Voice Input / Command / Trigger           │   │
+│  │  Context-Aware → ActionRouter              │   │
+│  │  GestureLogger → CSV                       │   │
+│  └─────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────┘
+```
+
+**Đặc điểm kỹ thuật:**
+- GUI và `main.py` chạy trong **2 process độc lập** — không chia sẻ memory.
+- GUI không redirect stdout của `main.py` — tránh buffer deadlock.
+- Poll timer 500ms kiểm tra trạng thái process — tự cập nhật UI khi `main.py` tắt.
+- `config.py` được import bằng `try/except` — GUI không crash nếu import lỗi.
+
+---
+
+### 14.2 Vai trò của GUI trong đề tài
+
+| Khía cạnh | Giải thích |
+|---|---|
+| **Trực quan** | Người dùng thấy Control Panel thay vì chỉ terminal — dễ hiểu khi demo |
+| **Dễ vận hành** | Bấm START/STOP thay vì gõ lệnh terminal — phù hợp môi trường bảo vệ đồ án |
+| **Hoàn thiện sản phẩm** | Hệ thống có UI launcher giống phần mềm thương mại |
+| **Không ảnh hưởng hiệu năng** | GUI chạy process riêng; camera loop 30 FPS của `main.py` không bị ảnh hưởng |
+| **Dễ mở rộng** | Kiến trúc subprocess cho phép nâng cấp GUI mà không sửa core |
+
+---
+
+### 14.3 Bảng chức năng GUI
+
+| Chức năng | Loại | Cách hoạt động |
+|---|---|---|
+| **Start Controller** | Hành động | `subprocess.Popen([python, main.py])`, guard chống multi-spawn |
+| **Stop Controller** | Hành động | `terminate()` → `wait(3s)` → `kill()` fallback trong background thread |
+| **Controller Status** | Hiển thị | Nhãn + màu: STOPPED (xám) / STARTING (vàng) / RUNNING (xanh) |
+| **Open Logs Folder** | Tiện ích | `os.startfile("logs/")` — mở Windows Explorer |
+| **Analyze Logs** | Tiện ích | Chạy `analyze_logs.py` trong `Thread(daemon=True)`, kết quả via `self.after()` |
+| **Open README** | Tài liệu | `os.startfile("README.md")` |
+| **Open Report** | Tài liệu | `os.startfile("BAO_CAO_HE_THONG.md")` |
+| **System Configuration** | Thông tin | Đọc từ `config.py` — hotkey, ngôn ngữ, các flag bật/tắt |
+| **Gesture Reference** | Thông tin | Bảng tóm tắt tư thế tay phải/trái ngay trong GUI |
+| **Analyze Output** | Hiển thị | Scrollable textbox — kết quả phân tích log phiên gần nhất |
+
+---
+
+### 14.4 Quy trình demo sử dụng GUI
+
+```
+Bước 1: Chạy Control Panel
+    python app_gui.py
+    → Cửa sổ Desktop Control Panel hiện ra, Status: STOPPED
+
+Bước 2: Bấm [START CONTROLLER]
+    → GUI spawn main.py dưới dạng subprocess
+    → Status: STARTING → RUNNING (sau 1.5s confirm)
+    → Cửa sổ OpenCV camera hiện ra riêng biệt
+
+Bước 3: Sử dụng hệ thống qua gesture/voice
+    → Tay phải: Move / Click / Drag / Scroll
+    → Tay trái: Toggle / Swipe / Zoom / Voice Trigger
+    → Ctrl+Alt+V: Voice Input bất kỳ lúc nào
+
+Bước 4: Dừng hệ thống
+    → Bấm [STOP] trong GUI — main.py terminate sạch
+    → Hoặc nhấn Q trong cửa sổ OpenCV → GUI tự về STOPPED
+
+Bước 5: Xem kết quả
+    → Bấm [Analyze Logs] → thống kê gesture/action từ phiên vừa chạy
+    → Bấm [Open Logs Folder] để xem file CSV thô
+```
+
+---
+
+### 14.5 Thông số kỹ thuật
+
+| Thông số | Giá trị |
+|---|---|
+| Framework | CustomTkinter (Tkinter wrapper) |
+| Kích thước cửa sổ | 520 × 800 px, không resize được |
+| Chế độ màu | Dark mode (`#1a1a2e` background) |
+| Poll interval | 500ms — kiểm tra trạng thái subprocess |
+| Analyze timeout | 15s — timeout cho `analyze_logs.py` |
+| Stop timeout | 3s wait trước khi force-kill |
+| Entry point | `if __name__ == "__main__": app.mainloop()` |
+| Dependencies thêm | `customtkinter` |
+
+---
+
+### 14.6 Ý nghĩa khi bảo vệ đồ án
+
+1. **Tăng tính chuyên nghiệp.** Hội đồng thấy sản phẩm có giao diện đồ họa — tạo ấn tượng về mức độ hoàn thiện.
+
+2. **Dễ vận hành trong thời gian demo ngắn.** Bấm 1 nút thay vì gõ lệnh terminal — giảm rủi ro lỗi thao tác khi demo trực tiếp trước hội đồng.
+
+3. **Minh họa kiến trúc phân tầng.** GUI và core chạy độc lập → minh chứng thiết kế module hóa, dễ mở rộng.
+
+4. **Không ảnh hưởng kết quả thực nghiệm.** Mọi kết quả gesture log và thống kê đều đến từ `main.py` — pipeline cốt lõi không bị thay đổi bởi GUI.
+
+5. **Dễ kiểm chứng.** Hội đồng có thể xem Gesture Reference ngay trong GUI mà không cần tra README.
 
 ---
 

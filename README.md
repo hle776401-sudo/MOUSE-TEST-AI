@@ -17,9 +17,10 @@
 9. [UI Overlay](#9-ui-overlay)
 10. [Cấu hình (config.py)](#10-cấu-hình-configpy)
 11. [Cài đặt & Chạy](#11-cài-đặt--chạy)
-12. [Phím tắt](#12-phím-tắt)
-13. [Sơ đồ class](#13-sơ-đồ-class)
-14. [Changelog Phase](#14-changelog-phase)
+12. [Desktop Control Panel GUI](#12-desktop-control-panel-gui)
+13. [Phím tắt](#13-phím-tắt)
+14. [Sơ đồ class](#14-sơ-đồ-class)
+15. [Changelog Phase](#15-changelog-phase)
 
 ---
 
@@ -56,6 +57,7 @@ Hệ thống cho phép người dùng **điều khiển máy tính hoàn toàn b
 ```
 MOUSE TEST AI/
 ├── main.py                     Main loop + UI overlay + mode switching
+├── app_gui.py                  Desktop Control Panel (CustomTkinter) [MỚI]
 ├── config.py                   Tất cả hằng số và tham số cấu hình
 ├── hand_tracking.py            MediaPipe wrapper — detect & extract hand data
 ├── gesture_recognition.py      4 class nhận diện gesture (bao gồm Swipe V2 + Voice Trigger)
@@ -639,11 +641,19 @@ pip install pipwin
 pipwin install pyaudio
 ```
 
-### Chạy
+### Chạy trực tiếp (terminal)
 
 ```bash
 python main.py
 ```
+
+### Chạy qua GUI (khái niệm sản phẩm)
+
+```bash
+python app_gui.py
+```
+
+> GUI là **Desktop Control Panel** — khởi động/dừng hệ thống, mở log, phân tích log, xem tài liệu. Xem mục 12 để biết thêm.
 
 ### Lần đầu sử dụng
 
@@ -651,11 +661,77 @@ python main.py
 2. Giơ **tay trái** với cả 5 ngón, giữ yên **3 giây** → System **ON**
 3. Dùng **tay phải** di chuyển chuột, click, scroll
 4. Dùng **tay trái** để swipe slide, zoom trang
-5. Nhấn **Ctrl+Alt+V** để dùng voice input
+5. Nhấn **Ctrl+Alt+V** hoặc giữ pose `[0,1,1,1,0]` 1.2s để dùng voice
 
 ---
 
-## 12. Phím tắt
+## 12. Desktop Control Panel GUI
+
+### Vai trò
+
+`app_gui.py` là **launcher độc lập** chạy `main.py` bằng `subprocess`. GUI không nhúng camera loop, không xử lý gesture, không can thiệp pipeline OpenCV/MediaPipe.
+
+```
+app_gui.py  (CustomTkinter window)
+    │
+    ├── subprocess.Popen([python, main.py])
+    │       └── main.py chạy độc lập trong process riêng
+    │               └── Camera loop + Gesture + Voice (không bị nhúng bởi GUI)
+    │
+    ├── poll timer (500ms) → tự cập nhật status khi process tắt
+    └── _on_close() → terminate + wait + kill → giải phóng sạch
+```
+
+### Danh sách chức năng GUI
+
+| Tính năng | Mô tả |
+|---|---|
+| **Start Controller** | Spawn `main.py` bằng subprocess; guard chống multi-spawn |
+| **Stop Controller** | `terminate()` → wait 3s → `kill()` fallback; không block GUI |
+| **Controller Status** | Nhãn trực quan: STOPPED / STARTING / RUNNING |
+| **Open Logs Folder** | Mở thư mục `logs/` bằng Windows Explorer |
+| **Analyze Logs** | Chạy `analyze_logs.py` trong background thread; hiện kết quả trong textbox |
+| **Open README** | Mở `README.md` bằng trình xem mặc định của Windows |
+| **Open Report** | Mở `BAO_CAO_HE_THONG.md` bằng trình xem mặc định |
+| **System Configuration** | Hiện các giá trị cấu hình đọc từ `config.py` (safe import) |
+| **Gesture Reference** | Bảng hướng dẫn nhanh cho cử chỉ tay phải/tay trái |
+| **Analyze Output** | Scrollable textbox hiện kết quả phân tích log |
+
+### Quy trình demo nhanh
+
+```
+1. Mở Control Panel:
+      python app_gui.py
+
+2. Bấm  [START CONTROLLER]
+      → Status chuyển RUNNING
+      → Cửa sổ camera OpenCV hiện ra riêng
+
+3. Dùng cử chỉ tay điều khiển hệ thống:
+      • 5 ngón tay trái giữ 3s  → System ON
+      • Tay phải di chuyển     → Move cursor
+      • Pinch ngắn              → Left Click
+      • 4 ngón swipe            → Next / Prev slide
+      • Ctrl+Alt+V              → Voice Input
+
+4. Bấm  [STOP] khi xong
+      → main.py dừng sạch, camera giải phóng
+
+5. Bấm  [Analyze Logs]
+      → Thống kê gesture/action từ phiên vừa chạy
+```
+
+### Lưu ý kỹ thuật
+
+- GUI **không redirect stdout** của `main.py` — tránh deadlock buffer.
+- `config.py` được import với `try/except` — GUI không crash nếu config lỗi.
+- `analyze_logs.py` chạy trong `threading.Thread(daemon=True)`, kết quả post về UI qua `self.after()`.
+- Poll timer 500ms tự cập nhật STOPPED khi người dùng nhấn `Q` trong cửa sổ camera.
+- Đóng GUI khi đang RUNNING → `_on_close()` gọi `terminate` → `wait(3s)` → `kill()` fallback.
+
+---
+
+## 13. Phím tắt
 
 | Phím / Tổ hợp | Chức năng |
 |---|---|
@@ -665,7 +741,7 @@ python main.py
 
 ---
 
-## 13. Sơ đồ class
+## 14. Sơ đồ class
 
 ```
 gesture_recognition.py
@@ -752,7 +828,7 @@ keyboard
 
 ---
 
-## 14. Changelog Phase
+## 15. Changelog Phase
 
 ### Phase: Context-Aware Gestures + Swipe V2 — **COMPLETED** ✅
 *Tháng 5/2026 · Review: Gemini Pro High PASS*
@@ -801,6 +877,30 @@ keyboard
 - ✅ Gesture Voice Trigger KHÔNG hoạt động khi System OFF
 - ✅ Zoom / Swipe / Toggle không bị ảnh hưởng
 - ✅ Camera loop không crash
+
+---
+
+---
+
+### Phase: Desktop Control Panel GUI-1 — **COMPLETED** ✅
+*Tháng 5/2026*
+
+| File | Thay đổi |
+|---|---|
+| `app_gui.py` | [MỚI] CustomTkinter GUI — Launcher, Status, Quick Access, Gesture Reference |
+| `requirements.txt` | Thêm `customtkinter` |
+
+**Validation PASS:**
+- ✅ GUI mở không crash, hiện Status STOPPED
+- ✅ START → spawn `main.py`, Status RUNNING, cự̉a sổ̉ OpenCV hiện riêng
+- ✅ Guard chống multi-spawn (bấm START 2 lần không spawn thêm process)
+- ✅ STOP → `terminate()` → wait 3s → `kill()` fallback — camera giải phóng sạch
+- ✅ Nhấn Q trong OpenCV → GUI tự về STOPPED trong ≤1s (poll 500ms)
+- ✅ Đóng GUI khi RUNNING → `_on_close()` terminate + wait + kill an toàn
+- ✅ Analyze Logs chạy trong background thread, không treo GUI
+- ✅ Config import lỗi → fallback defaults, không crash
+- ✅ Open Logs / README / Report → mở đúng bằng Windows default app
+- ✅ `main.py` và tất cả file core **không bị sửa**
 
 ---
 
