@@ -14,3 +14,6 @@ PyAutoGUI==0.9.54
 SpeechRecognition==3.14.5
 PyAudio==0.2.14            # Windows: if pip fails, use: pipwin install pyaudio
 keyboard                   # Global hotkey (bat phim khong can focus cua so webcam)
+
+# GUI Desktop Control Panel
+customtkinter              # Modern Tkinter widgets for app_gui.py
