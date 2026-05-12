@@ -283,9 +283,10 @@ class GestureRecognizer:
             return result
 
         # --- 2E: MOVE CURSOR ---
-        # Guard: không move khi đang ở zoom mode hoặc swipe tracking
-        # Để tránh cursor nhảy khi đang thao tác mode khác
-        if not self._zoom_active and not self._swipe_tracking:
+        # Guard: không move khi đang ở zoom mode, swipe tracking,
+        # hoặc pinch đang PREPARING (tránh cursor jitter trước click)
+        if (not self._zoom_active and not self._swipe_tracking
+                and self.pinch_state == PinchState.IDLE):
             move_result = self._check_move_cursor(fingers, index_tip)
             if move_result is not None:
                 result["gesture"] = GESTURE_MOVE
@@ -879,13 +880,16 @@ class PrimaryHandRecognizer:
             return result
 
         # --- MOVE CURSOR ---
-        move_result = self._check_move_cursor(fingers, index_tip)
-        if move_result is not None:
-            result["gesture"] = GESTURE_MOVE
-            result["cursor_pos"] = move_result
-            result["click_freeze_until"] = self._click_freeze_until
-            self.current_gesture = GESTURE_MOVE
-            return result
+        # Guard: không move khi pinch đang PREPARING (tránh cursor jitter trước click)
+        # DRAGGING an toàn vì _check_pinch_action đã return GESTURE_DRAGGING trước block này
+        if self.pinch_state == PinchState.IDLE:
+            move_result = self._check_move_cursor(fingers, index_tip)
+            if move_result is not None:
+                result["gesture"] = GESTURE_MOVE
+                result["cursor_pos"] = move_result
+                result["click_freeze_until"] = self._click_freeze_until
+                self.current_gesture = GESTURE_MOVE
+                return result
 
         self.current_gesture = GESTURE_NONE
         return result
