@@ -26,7 +26,8 @@ ROI_Y_MAX = CAMERA_HEIGHT - ROI_PADDING_Y
 MAX_NUM_HANDS = 2                   # So luong ban tay toi da detect
 MIN_DETECTION_CONFIDENCE = 0.7      # Nguong tin cay khi phat hien ban tay
 MIN_TRACKING_CONFIDENCE = 0.7       # Nguong tin cay khi theo doi ban tay
-MODEL_COMPLEXITY = 1                # Do phuc tap model (0 = nhe, 1 = day du)
+MODEL_COMPLEXITY = 0                # Do phuc tap model (0 = nhe/nhanh, 1 = day du)
+                                    # 0 uu tien FPS cho demo, 1 tracking chinh xac hon
 
 # --- Che do 2 tay phan vai ---
 ENABLE_TWO_HAND_MODE = True         # Bat che do 2 tay (True = 2 tay, False = fallback 1 tay)
@@ -49,6 +50,13 @@ SHOW_HANDEDNESS_DEBUG = True        # Hien thi raw MediaPipe label tren overlay 
 MODE_ENTER_TWO_HAND_FRAMES = 5     # Phai thay 2 tay lien tuc 5 frame moi vao 2-hand mode
 MODE_EXIT_TWO_HAND_FRAMES = 30     # Phai mat 1 tay lien tuc 30 frame (~1 giay) moi roi ve fallback
 
+# --- Duplicate hand filter ---
+# MediaPipe doi khi tra ve 2 detection cho cung 1 ban tay (label "Right" + "Left")
+# Filter loai duplicate truoc khi assign PRIMARY/SECONDARY
+DUPLICATE_HAND_IOU_THRESHOLD    = 0.35   # IoU bbox > 0.35 = duplicate ro rang
+DUPLICATE_HAND_CENTER_DISTANCE  = 80     # px — chi dung kem dieu kien size_ratio + overlap
+MIN_PALM_SIZE                   = 30     # px — palm_size < 30 coi la detection loi, bo qua
+
 # --- Mau label 2 tay ---
 COLOR_PRIMARY_HAND = (0, 255, 0)    # Xanh la - Primary hand bbox
 COLOR_SECONDARY_HAND = (255, 165, 0) # Cam - Secondary hand bbox
@@ -60,7 +68,8 @@ COLOR_SECONDARY_HAND = (255, 165, 0) # Cam - Secondary hand bbox
 # --- Pinch (Dùng chung cho Click + Drag) ---
 CLICK_DISTANCE_THRESHOLD = 40       # Fallback pixel khi không có palm_size (pixels)
 CLICK_COOLDOWN = 0.2                # Cooldown giữa các lần click (giây)
-PINCH_HOLD_THRESHOLD = 0.60         # Giữ pinch > 600ms = drag, < 600ms = click (giây)
+PINCH_HOLD_THRESHOLD = 0.85         # Giu pinch > 850ms = drag, < 850ms = click (giay)
+                                    # Tang tu 0.60 -> 0.85 de tranh drag nham
 PINCH_THRESHOLD_NORMALIZED = 0.28   # Ngưỡng pinch ENTER (~28% kích thước tay)
 PINCH_EXIT_MULTIPLIER = 1.3         # Hysteresis: exit = enter * 1.3 (tránh flickering ở biên)
 
@@ -119,8 +128,9 @@ ZOOM_STABLE_FRAMES = 4              # Số frame liên tục ở zoom mode mới
 # ==============================================================================
 # 4. SMOOTHING (LÀM MƯỢT CHUỘT)
 # ==============================================================================
-SMOOTHING_FACTOR = 4                # Hệ số làm mượt (càng cao = càng mượt nhưng phản hồi chậm hơn)
+SMOOTHING_FACTOR = 6                # Hệ số làm mượt (càng cao = càng mượt nhưng phản hồi chậm hơn)
                                     # Công thức: current = previous + (target - previous) / factor
+                                    # Tang tu 4 -> 6 de giam jitter cursor
 
 # ==============================================================================
 # 5. MÀU SẮC (BGR Format cho OpenCV)
@@ -358,3 +368,55 @@ ENABLE_GESTURE_VOICE_TRIGGER = True         # True = bat tinh nang nay
 VOICE_TRIGGER_POSE           = [0, 1, 1, 1, 0]  # cai cụp, tro/giua/ap-ut duoi, ut cụp
 VOICE_TRIGGER_HOLD_SECS      = 1.2          # Giay phai giu pose de trigger
 VOICE_TRIGGER_COOLDOWN       = 3.0          # Giay khong trigger lai sau khi fired
+
+# ==============================================================================
+# Section 14: DEMO MODE — Che do demo an toan truoc hoi dong
+# ==============================================================================
+# Khi DEMO_MODE = False: dung nhom ENABLE_* de bat/tat tung gesture.
+# Khi DEMO_MODE = True:  dung nhom DEMO_ENABLE_* thay the, tang cooldown, tang stable frames.
+# DEMO_MODE khong lam mat chuc nang o che do thuong.
+
+DEMO_MODE = False                   # False = che do thuong, True = che do demo an toan
+
+# --- Che do thuong (DEMO_MODE = False) ---
+ENABLE_DOUBLE_CLICK    = True       # Bat/tat Double Click
+ENABLE_DRAG            = True       # Bat/tat Drag and Drop
+ENABLE_RIGHT_CLICK     = True       # Bat/tat Right Click
+ENABLE_ZOOM            = True       # Bat/tat Zoom In/Out
+ENABLE_VOICE_TRIGGER_G = True       # Bat/tat Gesture Voice Trigger (khac ENABLE_GESTURE_VOICE_TRIGGER)
+ENABLE_SWIPE           = True       # Bat/tat Swipe Left/Right
+ENABLE_SCROLL          = True       # Bat/tat Scroll Up/Down
+ENABLE_SYSTEM_TOGGLE   = True       # Bat/tat System Toggle (5 ngon)
+
+# --- Che do demo (DEMO_MODE = True) ---
+DEMO_ENABLE_DOUBLE_CLICK    = False  # Demo: tat double click de tranh nham
+DEMO_ENABLE_DRAG            = False  # Demo: tat drag de tranh loi
+DEMO_ENABLE_RIGHT_CLICK     = False  # Demo: tat right click de tranh mo menu
+DEMO_ENABLE_ZOOM            = False  # Demo: tat zoom de tranh tu kich hoat
+DEMO_ENABLE_VOICE_TRIGGER_G = False  # Demo: tat voice trigger gesture
+DEMO_ENABLE_SWIPE           = True   # Demo: giu swipe (on dinh)
+DEMO_ENABLE_SCROLL          = True   # Demo: giu scroll (on dinh)
+DEMO_ENABLE_SYSTEM_TOGGLE   = True   # Demo: giu system toggle
+
+# --- Demo mode multipliers (nhan voi gia tri goc) ---
+DEMO_COOLDOWN_MULTIPLIER      = 1.5  # Tang cooldown x1.5 khi demo
+DEMO_POST_ACTION_MULTIPLIER   = 2.0  # Tang post-action cooldown x2 khi demo
+DEMO_PINCH_HOLD_THRESHOLD     = 1.20 # Pinch hold lau hon khi demo (1.2s, ko bao gio drag)
+
+# ==============================================================================
+# Section 15: CURSOR STABILITY — Tham so on dinh con tro
+# ==============================================================================
+CURSOR_SMOOTHING       = 6          # EMA factor cho con tro (dung thay SMOOTHING_FACTOR)
+CURSOR_DEADZONE        = 5          # Pixels tren man hinh, tuong duong MOVE_DEADZONE
+MAX_CURSOR_JUMP        = 200        # Pixels/frame toi da. Vuot thi clamp thay vi skip
+                                    # Tranh con tro nhay dot ngot khi landmark loi
+LOST_HAND_GRACE_FRAMES = 5          # Frame mat tay truoc khi reset gesture state
+                                    # Trong grace: khong action moi, khong reset
+                                    # Qua grace: reset state, release drag neu dang drag
+PINCH_STABLE_FRAMES    = 3          # Frame lien tuc pinch moi vao PREPARING
+                                    # Tang tu 2 -> 3 de giam click/drag nham
+
+# --- Right Click stability ---
+RIGHT_CLICK_STABLE_FRAMES = 4       # Frame lien tuc o right-click pose moi bat dau tracking
+RIGHT_CLICK_COOLDOWN      = 1.0     # Cooldown rieng cho right click (giay) — tang tu 0.2
+                                    # Tranh ban lien tuc khi giu pose

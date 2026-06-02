@@ -428,6 +428,179 @@ def draw_context_hud(frame, context_manager, controller):
         pass  # Tuyet doi khong crash camera loop
 
 
+# ==============================================================================
+# DUPLICATE HAND FILTER — Loai truong hop MediaPipe nhan 1 tay thanh 2
+# ==============================================================================
+
+def _compute_iou(bbox_a, bbox_b):
+    """Tinh Intersection over Union giua 2 bbox (x1, y1, x2, y2).
+
+    Returns:
+        (iou, overlap_area): float IoU [0,1] va dien tich overlap (px^2)
+    """
+    if bbox_a is None or bbox_b is None:
+        return 0.0, 0
+
+    x1 = max(bbox_a[0], bbox_b[0])
+    y1 = max(bbox_a[1], bbox_b[1])
+    x2 = min(bbox_a[2], bbox_b[2])
+    y2 = min(bbox_a[3], bbox_b[3])
+
+    inter_w = max(0, x2 - x1)
+    inter_h = max(0, y2 - y1)
+    overlap_area = inter_w * inter_h
+
+    area_a = max(0, (bbox_a[2] - bbox_a[0]) * (bbox_a[3] - bbox_a[1]))
+    area_b = max(0, (bbox_b[2] - bbox_b[0]) * (bbox_b[3] - bbox_b[1]))
+    union = area_a + area_b - overlap_area
+
+    if union <= 0:
+        return 0.0, 0
+
+    return overlap_area / union, overlap_area
+
+
+def _filter_duplicate_hands(all_hands):
+    """Loc duplicate: neu 2 hand thuc chat la 1 ban tay, chi giu 1.
+
+    Logic hybrid (theo yeu cau):
+      - IoU > DUPLICATE_HAND_IOU_THRESHOLD  => duplicate ro rang
+      - center_dist < DUPLICATE_HAND_CENTER_DISTANCE
+          AND 0.6 <= size_ratio <= 1.6
+          AND overlap_area > 0             => duplicate phong thu
+
+    Khi duplicate, uu tien giu hand co label khop PRIMARY_HAND_LABEL.
+    Neu ca 2 cung label, giu hand co confidence cao hon (qua MediaPipe score
+    luu trong hand data, hien tai fallback giu hand dau tien).
+
+    Args:
+        all_hands: list[dict] tu get_all_hands_data()
+
+    Returns:
+        list[dict]: da loc duplicate
+    """
+    if len(all_hands) < 2:
+        return all_hands
+
+    iou_thresh = getattr(cfg, 'DUPLICATE_HAND_IOU_THRESHOLD', 0.35)
+    center_thresh = getattr(cfg, 'DUPLICATE_HAND_CENTER_DISTANCE', 80)
+    min_palm = getattr(cfg, 'MIN_PALM_SIZE', 30)
+
+    # --- Loc hand co palm_size qua nho (detection loi) ---
+    valid_hands = []
+    for hd in all_hands:
+        ps = hd.get("palm_size", 0)
+        if ps >= min_palm:
+            valid_hands.append(hd)
+        else:
+            print(f"[DUP_FILTER] Removed hand idx={hd['hand_index']} "
+                  f"palm_size={ps:.0f} < {min_palm}")
+
+    if len(valid_hands) < 2:
+        return valid_hands
+
+    # --- Kiem tra tung cap hand ---
+    # Voi MAX_NUM_HANDS=2, toi da 2 hand, chi can kiem tra 1 cap
+    to_remove = set()
+
+    for i in range(len(valid_hands)):
+        if i in to_remove:
+            continue
+        for j in range(i + 1, len(valid_hands)):
+            if j in to_remove:
+                continue
+
+            h_a = valid_hands[i]
+            h_b = valid_hands[j]
+
+            bbox_a = h_a.get("bbox")
+            bbox_b = h_b.get("bbox")
+
+            # Tinh IoU
+            iou, overlap_area = _compute_iou(bbox_a, bbox_b)
+
+            # Tinh center distance
+            ca = h_a.get("center")
+            cb = h_b.get("center")
+            if ca and cb:
+                center_dist = ((ca[0] - cb[0]) ** 2 + (ca[1] - cb[1]) ** 2) ** 0.5
+            else:
+                center_dist = 9999
+
+            # Tinh size ratio
+            ps_a = h_a.get("palm_size", 1)
+            ps_b = h_b.get("palm_size", 1)
+            size_ratio = ps_a / ps_b if ps_b > 0 else 999
+
+            # --- Hybrid logic ---
+            is_duplicate = (
+                iou > iou_thresh
+                or (
+                    center_dist < center_thresh
+                    and 0.6 <= size_ratio <= 1.6
+                    and overlap_area > 0
+                )
+            )
+
+            if is_duplicate:
+                # Uu tien giu hand co label = PRIMARY_HAND_LABEL
+                primary_label = getattr(cfg, 'PRIMARY_HAND_LABEL', 'Right')
+                if h_a["handedness"] == primary_label and h_b["handedness"] != primary_label:
+                    to_remove.add(j)
+                elif h_b["handedness"] == primary_label and h_a["handedness"] != primary_label:
+                    to_remove.add(i)
+                else:
+                    # Ca 2 cung label hoac ca 2 khong phai primary → giu hand dau
+                    to_remove.add(j)
+
+                print(f"[DUP_FILTER] Duplicate detected! "
+                      f"IoU={iou:.2f} center_dist={center_dist:.0f} "
+                      f"size_ratio={size_ratio:.2f} overlap={overlap_area} "
+                      f"— removed hand idx={valid_hands[list(to_remove)[-1]]['hand_index']} "
+                      f"label={valid_hands[list(to_remove)[-1]]['handedness']}")
+
+    result = [h for idx, h in enumerate(valid_hands) if idx not in to_remove]
+    return result
+
+
+def _are_hands_separated(hand_a, hand_b):
+    """Kiem tra 2 tay thuc su tach biet (defense in depth cho mode switching).
+
+    Returns:
+        True neu 2 tay du xa + khong overlap qua nhieu + palm_size hop le.
+        False neu 2 tay co dau hieu la duplicate hoac overlap lon.
+    """
+    if hand_a is None or hand_b is None:
+        return False
+
+    iou_thresh = getattr(cfg, 'DUPLICATE_HAND_IOU_THRESHOLD', 0.35)
+    center_thresh = getattr(cfg, 'DUPLICATE_HAND_CENTER_DISTANCE', 80)
+    min_palm = getattr(cfg, 'MIN_PALM_SIZE', 30)
+
+    # Palm size check
+    ps_a = hand_a.get("palm_size", 0)
+    ps_b = hand_b.get("palm_size", 0)
+    if ps_a < min_palm or ps_b < min_palm:
+        return False
+
+    # IoU check
+    iou, overlap_area = _compute_iou(hand_a.get("bbox"), hand_b.get("bbox"))
+    if iou > iou_thresh:
+        return False
+
+    # Center distance + size ratio check
+    ca = hand_a.get("center")
+    cb = hand_b.get("center")
+    if ca and cb:
+        center_dist = ((ca[0] - cb[0]) ** 2 + (ca[1] - cb[1]) ** 2) ** 0.5
+        size_ratio = ps_a / ps_b if ps_b > 0 else 999
+        if (center_dist < center_thresh
+                and 0.6 <= size_ratio <= 1.6
+                and overlap_area > 0):
+            return False
+
+    return True
+
 
 def main():
     """Hàm chính — khởi tạo modules, chạy vòng lặp real-time."""
@@ -439,6 +612,11 @@ def main():
     cap = cv2.VideoCapture(cfg.CAMERA_ID)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg.CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.CAMERA_HEIGHT)
+    # Giam camera buffer de frame luon moi nhat — giam input lag
+    try:
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass  # Khong phai backend nao cung ho tro
 
     if not cap.isOpened():
         print("[ERROR] Cannot open webcam!")
@@ -632,6 +810,14 @@ def main():
     # FPS
     prev_time = 0
     fps = 0
+    fps_sum = 0.0        # Session stats: tong FPS
+    fps_count = 0        # Session stats: so frame
+    total_gestures = 0   # Session stats: tong gesture != None
+    total_actions = 0    # Session stats: tong action dispatched
+
+    # Lost hand grace
+    lost_hand_frames = 0
+    grace_limit = getattr(cfg, 'LOST_HAND_GRACE_FRAMES', 5)
 
     # Banner linger
     linger_gesture = None
@@ -643,6 +829,7 @@ def main():
     print(f"  Smoothing: {cfg.SMOOTHING_FACTOR}")
     print(f"  Two-Hand Mode: {cfg.ENABLE_TWO_HAND_MODE}")
     print(f"  Dominant Hand: {cfg.DOMINANT_HAND}")
+    print(f"  DEMO_MODE: {'ON' if cfg.DEMO_MODE else 'OFF'}")
     if gesture_logger and gesture_logger.get_log_path():
         print(f"  Gesture Log: {gesture_logger.get_log_path()}")
     else:
@@ -655,8 +842,12 @@ def main():
             print(f"  Voice Commands: OFF")
     print(f"  System: OFF (hold 5 fingers on secondary hand 3s to enable)")
     print("=" * 50)
-    print("  Press 'q' to quit | 's' to toggle control")
+    print("  Press 'q' to quit | 's' to toggle control | 'd' to toggle DEMO")
     print("=" * 50)
+
+    # --- Tao cua so OpenCV co kich thuoc co dinh ---
+    cv2.namedWindow(cfg.WINDOW_NAME, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(cfg.WINDOW_NAME, cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT)
 
     try:
         while True:
@@ -677,7 +868,16 @@ def main():
 
             # --- 2 TAY: lay data cho tat ca tay ---
             all_hands = detector.get_all_hands_data(frame)
+
+            # --- LOC DUPLICATE HAND ---
+            # MediaPipe doi khi nhan 1 tay thanh 2 (label "Right" + "Left")
+            # Loc truoc khi assign PRIMARY/SECONDARY
+            all_hands = _filter_duplicate_hands(all_hands)
             num_hands = len(all_hands)
+
+            # Reset lost hand grace khi co tay tro lai
+            if num_hands > 0:
+                lost_hand_frames = 0
 
             # ============================================================
             # HAND ASSIGNMENT (luon gan role bat ke mode)
@@ -738,7 +938,14 @@ def main():
             # MODE SWITCHING HYSTERESIS
             # ============================================================
             if cfg.ENABLE_TWO_HAND_MODE:
-                if num_hands >= 2 and primary_hand and secondary_hand:
+                # Dieu kien vao TWO_HAND: 2 tay + assign thanh cong + tach biet thuc su
+                hands_valid_for_two = (
+                    num_hands >= 2
+                    and primary_hand is not None
+                    and secondary_hand is not None
+                    and _are_hands_separated(primary_hand, secondary_hand)
+                )
+                if hands_valid_for_two:
                     two_hand_count += 1
                     one_hand_count = 0
                 else:
@@ -838,6 +1045,11 @@ def main():
                         primary_hand["landmarks"],
                         coordinator.primary_recognizer
                     )
+
+                # Ve landmarks cho secondary hand
+                if secondary_hand:
+                    detector.landmark_list = secondary_hand["landmarks"]
+                    detector.draw_custom_landmarks(frame)
 
             elif is_two_hand_mode and num_hands >= 1 and not (primary_hand and secondary_hand):
                 # ====== 2-HAND MODE nhung tam hut 1 tay (hysteresis giu mode) ======
@@ -999,20 +1211,39 @@ def main():
 
             elif num_hands == 0:
                 # ====== KHONG CO TAY ======
-                # Khong goi fallback_recognizer nua — giu state tu coordinator
-                current_gesture = GESTURE_NONE
-                system_active = coordinator.system_active
-                gesture_result = {
-                    "gesture": GESTURE_NONE,
-                    "cursor_pos": None,
-                    "scroll_delta": None,
-                    "drag_pos": None,
-                    "system_active": system_active,
-                    "click_anchor": None,
-                    "click_freeze_until": 0,
-                }
-                if controller.is_dragging:
-                    controller.drag_end()
+                # Lost hand grace: khong reset ngay, cho vài frame
+                lost_hand_frames += 1
+
+                if lost_hand_frames <= grace_limit:
+                    # Trong grace: giu state, KHONG action moi
+                    current_gesture = GESTURE_NONE
+                    system_active = coordinator.system_active
+                    gesture_result = {
+                        "gesture": GESTURE_NONE,
+                        "cursor_pos": None,
+                        "scroll_delta": None,
+                        "drag_pos": None,
+                        "system_active": system_active,
+                        "click_anchor": None,
+                        "click_freeze_until": 0,
+                    }
+                    # Khong release drag trong grace
+                else:
+                    # Qua grace: reset state, release drag an toan
+                    current_gesture = GESTURE_NONE
+                    system_active = coordinator.system_active
+                    gesture_result = {
+                        "gesture": GESTURE_NONE,
+                        "cursor_pos": None,
+                        "scroll_delta": None,
+                        "drag_pos": None,
+                        "system_active": system_active,
+                        "click_anchor": None,
+                        "click_freeze_until": 0,
+                    }
+                    if controller.is_dragging:
+                        controller.drag_end()
+                        print("[GRACE] Drag released — hand lost too long")
 
             # --- Ve bbox + label cho tung tay ---
             if primary_hand and primary_hand["bbox"]:
@@ -1088,6 +1319,11 @@ def main():
             if current_time - prev_time > 0:
                 fps = 1 / (current_time - prev_time)
             prev_time = current_time
+            # Session stats
+            fps_sum += fps
+            fps_count += 1
+            if current_gesture not in (GESTURE_NONE, GESTURE_MOVE, GESTURE_OPEN_PALM):
+                total_gestures += 1
 
             # --- HUD ---
             detector.draw_info(frame, fps, current_gesture, system_active)
@@ -1101,6 +1337,20 @@ def main():
 
             # --- Context HUD (goc tren-phai) ---
             draw_context_hud(frame, context_manager, controller)
+
+            # --- DEMO MODE overlay ---
+            if getattr(cfg, 'DEMO_MODE', False):
+                dm_text = "DEMO MODE"
+                dm_font = cv2.FONT_HERSHEY_SIMPLEX
+                dm_size = cv2.getTextSize(dm_text, dm_font, 0.6, 2)[0]
+                dm_x = cfg.CAMERA_WIDTH - dm_size[0] - 10
+                dm_y = 60
+                # Background
+                cv2.rectangle(frame, (dm_x - 5, dm_y - dm_size[1] - 5),
+                              (dm_x + dm_size[0] + 5, dm_y + 5),
+                              (0, 100, 0), -1)
+                cv2.putText(frame, dm_text, (dm_x, dm_y),
+                            dm_font, 0.6, (0, 255, 0), 2)
 
             # --- Voice status overlay ---
             if cfg.ENABLE_VOICE_INPUT and cfg.VOICE_STATUS_DISPLAY:
@@ -1145,6 +1395,9 @@ def main():
                 print(f"[KEY] System {state}")
                 if state == "OFF" and controller.is_dragging:
                     controller.drag_end()
+            elif key == ord('d') or key == ord('D'):
+                cfg.DEMO_MODE = not cfg.DEMO_MODE
+                print(f"[KEY] DEMO_MODE {'ON' if cfg.DEMO_MODE else 'OFF'}")
 
             # (Voice duoc xu ly qua global hotkey, khong can cv2 key handler o day)
 
@@ -1168,6 +1421,17 @@ def main():
         cap.release()
         detector.release()
         cv2.destroyAllWindows()
+
+        # --- Session Stats ---
+        print("\n" + "=" * 50)
+        print("  SESSION STATISTICS")
+        print("=" * 50)
+        avg_fps = (fps_sum / fps_count) if fps_count > 0 else 0
+        print(f"  Average FPS:    {avg_fps:.1f}")
+        print(f"  Total Frames:   {fps_count}")
+        print(f"  Total Gestures: {total_gestures}")
+        print(f"  DEMO_MODE:      {'ON' if cfg.DEMO_MODE else 'OFF'}")
+        print("=" * 50)
         print("[INFO] Resources released. Goodbye!")
 
 
