@@ -218,9 +218,9 @@ Bài toán phân biệt Click vs Drag dựa trên **thời gian giữ pinch**:
 ```
 IDLE ──[pinch vào]──► PREPARING
                           │
-                    [< 300ms, thả]──► LEFT_CLICK
+                    [< 600ms, thả]──► LEFT_CLICK
                           │
-                    [≥ 300ms]──► HOLDING ──► DRAGGING ──[thả]──► DRAG_END
+                    [≥ 600ms]──► DRAGGING ──[thả]──► DRAG_END
 ```
 
 **Double Click**: 2 lần LEFT_CLICK trong 0.5 giây.
@@ -241,14 +241,14 @@ Action: pyautogui.scroll(±12)
 Phase Context-Aware Gestures đã thiết kế lại Swipe bằng **State Machine 4 trạng thái** trong `SecondaryHandRecognizer`:
 
 ```
-IDLE ──[pose OK × 3 frame]──► ARMED ──[dx > 15px]──► TRACKING
+IDLE ──[pose OK × 2 frame]──► ARMED ──[dx > 15px]──► TRACKING
   ▲                              │                      │
   │  pose lost > grace          │ timeout              │ timeout
   └────────────────────────────────────────────────┘
                                                │
                                dx≥60 & vel≥120 & t≥0.12s
                                                ▼
-                                     COOLDOWN (0.7s) ──► IDLE
+                                     COOLDOWN (0.5s) ──► IDLE
                                      return Swipe Left/Right
 ```
 
@@ -310,7 +310,7 @@ Action: Bật/Tắt toàn bộ hệ thống
 | 1 | Pinch Hysteresis | Click/Drag | Enter 28%, exit 36.4% — chống flicker biên |
 | 2 | PinchState Machine | Click/Drag | Phân biệt click vs drag theo thời gian |
 | 3 | Post-action Cooldown | Mọi event | 0.15s nghỉ sau mỗi gesture event |
-| 4 | Click Freeze | Cursor | 100ms không move sau click — chống rung |
+| 4 | Click Freeze | Cursor | 200ms không move sau click — chống rung |
 | 5 | Deadzone | Cursor | 5px — bỏ qua micro-movement |
 | 6 | Smoothing | Cursor | factor=4, nội suy tuyến tính |
 | 7 | Frame Stability | Zoom/Swipe | N frame liên tục mới bắt đầu tracking |
@@ -391,7 +391,7 @@ Text "thời tiết" → encode UTF-16-LE → copy vào clipboard → Ctrl+V pas
 | Hand | PRIMARY_HAND_LABEL | "Right" | Tay phải = Primary |
 | Mode | MODE_ENTER / EXIT | 5 / 30 frame | Hysteresis chuyển mode |
 | Pinch | PINCH_THRESHOLD_NORMALIZED | 0.28 | Ngưỡng pinch 28% palm |
-| Pinch | PINCH_HOLD_THRESHOLD | 0.30s | Click < 300ms, Drag ≥ 300ms |
+| Pinch | PINCH_HOLD_THRESHOLD | 0.60s | Click < 600ms, Drag ≥ 600ms |
 | Scroll | SCROLL_SPEED | 12 | Đơn vị scroll mỗi frame |
 | Swipe | SWIPE_THRESHOLD_X | 80px | Di ngang tối thiểu |
 | Swipe | SWIPE_MODE | "auto" | Tự động route theo context; override: slide/pdf/browser/image |
@@ -408,7 +408,7 @@ Text "thời tiết" → encode UTF-16-LE → copy vào clipboard → Ctrl+V pas
 ```
 gesture_recognition.py
 ├── PinchState (enum)
-│     IDLE / PREPARING / HOLDING / DRAGGING
+│     IDLE / PREPARING / DRAGGING
 │
 ├── GestureRecognizer            ← Legacy (không dùng trong runtime)
 │
@@ -515,13 +515,13 @@ Active Window Title (Windows API qua ctypes)
 
 | Tham số | Giá trị | Mục đích |
 |---|---|---|
-| `SWIPE_V2_POSE_STABLE_FRAMES` | 3 | Cần 3 frame pose ổn định → ARMED |
+| `SWIPE_V2_POSE_STABLE_FRAMES` | 2 | Cần 2 frame pose ổn định → ARMED |
 | `SWIPE_V2_MIN_DISTANCE_X` | 60px | Quãng đường ngang tối thiểu |
 | `SWIPE_V2_MIN_VELOCITY_X` | 120px/s | Tốc độ tối thiểu (lọc chầm chạp) |
 | `SWIPE_V2_MIN_TIME` | 0.12s | Loại cử động giật tay |
 | `SWIPE_V2_MAX_TIME` | 0.9s | Timeout tuyến tính |
 | `SWIPE_V2_LOST_GRACE_FRAMES` | 4 | Dung sai mất pose (giữ state) |
-| `SWIPE_V2_COOLDOWN` | 0.7s | Chống re-trigger ngay sau swipe |
+| `SWIPE_V2_COOLDOWN` | 0.5s | Chống re-trigger ngay sau swipe |
 
 **Fallback an toàn**: `ENABLE_SWIPE_V2 = False` → gọi `_check_swipe_legacy()` giữ nguyên hành vi cũ.
 
