@@ -29,6 +29,35 @@ from utils import calculate_distance, cooldown_passed
 
 
 # ==============================================================================
+# DEMO MODE HELPER — Kiem tra gesture co duoc phep khong
+# ==============================================================================
+def _is_gesture_enabled(gesture_key: str) -> bool:
+    """Kiem tra gesture co duoc bat khong, phan biet DEMO_MODE va che do thuong.
+
+    Args:
+        gesture_key: Ten gesture, vi du 'double_click', 'drag', 'zoom',
+                     'swipe', 'scroll', 'system_toggle', 'voice_trigger_g'.
+
+    Returns:
+        True neu gesture duoc phep, False neu bi tat.
+    """
+    key_upper = gesture_key.upper()
+    if getattr(cfg, 'DEMO_MODE', False):
+        return getattr(cfg, f'DEMO_ENABLE_{key_upper}', True)
+    else:
+        return getattr(cfg, f'ENABLE_{key_upper}', True)
+
+
+def _get_effective_cooldown(base_value: float, is_post_action: bool = False) -> float:
+    """Tra ve cooldown hieu dung, co nhan multiplier khi DEMO_MODE=True."""
+    if not getattr(cfg, 'DEMO_MODE', False):
+        return base_value
+    if is_post_action:
+        return base_value * getattr(cfg, 'DEMO_POST_ACTION_MULTIPLIER', 2.0)
+    return base_value * getattr(cfg, 'DEMO_COOLDOWN_MULTIPLIER', 1.5)
+
+
+# ==============================================================================
 # GESTURE NAMES (hằng số tên cử chỉ)
 # ==============================================================================
 GESTURE_NONE = "None"
@@ -98,6 +127,7 @@ class GestureRecognizer:
         self._left_click_time = 0       # Thời điểm left click cuối
         self._is_pinching_prev = False   # Trạng thái pinch frame trước (hysteresis)
         self.click_anchor_pos = None    # Vi tri on dinh khi bat dau pinch (cho feedback + click)
+        self._pinch_stable_count = 0    # Stable frames counter
 
         # --- Double Click ---
         self._first_click_time = 0      # Thời điểm click lần 1 (chờ click lần 2)
@@ -106,6 +136,7 @@ class GestureRecognizer:
         # --- Right Click ---
         self._right_click_time = 0
         self._right_click_was_pinching = False
+        self._right_click_stable_count = 0  # Stable frames counter
 
         # --- Scroll ---
         self._scroll_prev_y = None
@@ -190,8 +221,9 @@ class GestureRecognizer:
         # Chống loạn khi tay đang chuyển tư thế sau click/swipe
         # Ngoại trừ: drag đang chạy, hoặc đang chờ double click
         # ------------------------------------------------------------------
+        eff_pac = _get_effective_cooldown(cfg.POST_ACTION_COOLDOWN, is_post_action=True)
         if not cooldown_passed(self._post_action_time,
-                               cfg.POST_ACTION_COOLDOWN, now):
+                               eff_pac, now):
             in_active_flow = (
                 self.pinch_state == PinchState.DRAGGING or
                 self.pinch_state == PinchState.PREPARING or
@@ -239,48 +271,52 @@ class GestureRecognizer:
             return result
 
         # --- 2B: ZOOM IN / OUT ---
-        # Guard gesture: index + middle up, ring + pinky down
-        # Thumb-index distance delta → Zoom In (tăng) / Zoom Out (giảm)
-        # Truyền thumb_middle_dist để guard khi đang là right-click candidate
-        zoom_result = self._check_zoom(fingers, thumb_index_dist, thumb_middle_dist,
-                                        pinch_enter, now)
-        if zoom_result is not None:
-            result["gesture"] = zoom_result
-            self.current_gesture = zoom_result
-            self._update_prev_positions(landmark_list, hand_center)
-            return result
+        if _is_gesture_enabled('zoom'):
+            zoom_result = self._check_zoom(fingers, thumb_index_dist, thumb_middle_dist,
+                                            pinch_enter, now)
+            if zoom_result is not None:
+                result["gesture"] = zoom_result
+                self.current_gesture = zoom_result
+                self._update_prev_positions(landmark_list, hand_center)
+                return result
 
         # --- 2C: RIGHT CLICK (chi khi KHONG o zoom mode) ---
-        right_click_result = self._check_right_click(
-            fingers, thumb_middle_dist, thumb_index_dist,
-            pinch_enter, pinch_exit, now
-        )
-        if right_click_result is not None:
-            result["gesture"] = right_click_result
-            # Lưu anchor cho right click feedback
-            self.click_anchor_pos = middle_tip
-            result["click_anchor"] = self.click_anchor_pos
-            result["click_freeze_until"] = self._click_freeze_until
-            self.current_gesture = right_click_result
-            self._update_prev_positions(landmark_list, hand_center)
-            return result
+        if _is_gesture_enabled('right_click'):
+            right_click_result = self._check_right_click(
+                fingers, thumb_middle_dist, thumb_index_dist,
+                pinch_enter, pinch_exit, now
+            )
+            if right_click_result is not None:
+                result["gesture"] = right_click_result
+                self.click_anchor_pos = middle_tip
+                result["click_anchor"] = self.click_anchor_pos
+                result["click_freeze_until"] = self._click_freeze_until
+                self.current_gesture = right_click_result
+                self._update_prev_positions(landmark_list, hand_center)
+                return result
+        else:
+            # Right click disabled: reset tracking state
+            self._right_click_was_pinching = False
+            self._right_click_stable_count = 0
 
         # --- 2C: SWIPE LEFT / RIGHT ---
-        swipe_result = self._check_swipe(fingers, hand_center, now)
-        if swipe_result is not None:
-            result["gesture"] = swipe_result
-            self.current_gesture = swipe_result
-            self._update_prev_positions(landmark_list, hand_center)
-            return result
+        if _is_gesture_enabled('swipe'):
+            swipe_result = self._check_swipe(fingers, hand_center, now)
+            if swipe_result is not None:
+                result["gesture"] = swipe_result
+                self.current_gesture = swipe_result
+                self._update_prev_positions(landmark_list, hand_center)
+                return result
 
         # --- 2D: SCROLL ---
-        scroll_result = self._check_scroll(fingers, hand_center)
-        if scroll_result is not None:
-            result["gesture"] = scroll_result[0]
-            result["scroll_delta"] = scroll_result[1]
-            self.current_gesture = scroll_result[0]
-            self._update_prev_positions(landmark_list, hand_center)
-            return result
+        if _is_gesture_enabled('scroll'):
+            scroll_result = self._check_scroll(fingers, hand_center)
+            if scroll_result is not None:
+                result["gesture"] = scroll_result[0]
+                result["scroll_delta"] = scroll_result[1]
+                self.current_gesture = scroll_result[0]
+                self._update_prev_positions(landmark_list, hand_center)
+                return result
 
         # --- 2E: MOVE CURSOR ---
         # Guard: không move khi đang ở zoom mode, swipe tracking,
@@ -373,69 +409,71 @@ class GestureRecognizer:
                             enter_threshold, exit_threshold, now):
         """
         Unified Pinch Handler — Click, Double Click, và Drag trong 1 flow.
-
-        Hysteresis:
-          - Enter pinch khi distance < enter_threshold
-          - Exit pinch khi distance > exit_threshold (exit > enter)
-          - Tránh flickering ở biên ngưỡng
-
-        Double Click:
-          - Left Click lần 1 → bắn ngay + ghi nhận thời điểm
-          - Left Click lần 2 trong DOUBLE_CLICK_TIME_WINDOW → bắn DOUBLE_CLICK
+        Với PINCH_STABLE_FRAMES + DEMO_MODE guards.
         """
         # GUARD: Ngón giữa giơ = zoom mode → skip Pinch
-        # Trừ khi đang DRAGGING (cho phép kết thúc drag dù ngón giữa giơ)
         if fingers[2] == 1 and self.pinch_state != PinchState.DRAGGING:
+            self._pinch_stable_count = 0
             return None
 
-        # Hysteresis: dùng threshold khác nhau cho enter vs exit
+        # Hysteresis
         if self._is_pinching_prev:
             is_pinching = thumb_index_dist < exit_threshold
         else:
             is_pinching = thumb_index_dist < enter_threshold
-
         self._is_pinching_prev = is_pinching
+
+        # Effective cooldown/threshold for DEMO_MODE
+        eff_click_cd = _get_effective_cooldown(cfg.CLICK_COOLDOWN)
+        eff_hold = (getattr(cfg, 'DEMO_PINCH_HOLD_THRESHOLD', cfg.PINCH_HOLD_THRESHOLD)
+                    if getattr(cfg, 'DEMO_MODE', False) else cfg.PINCH_HOLD_THRESHOLD)
+        stable_needed = getattr(cfg, 'PINCH_STABLE_FRAMES', 2)
 
         # --- State: IDLE ---
         if self.pinch_state == PinchState.IDLE:
             if is_pinching and fingers[1] == 1:
-                self.pinch_state = PinchState.PREPARING
-                self._pinch_start_time = now
-                self.click_anchor_pos = index_tip  # Lưu vị trí ổn định cho feedback
+                self._pinch_stable_count += 1
+                if self._pinch_stable_count >= stable_needed:
+                    self.pinch_state = PinchState.PREPARING
+                    self._pinch_start_time = now
+                    self.click_anchor_pos = index_tip
+                    self._pinch_stable_count = 0
+            else:
+                self._pinch_stable_count = 0
             return None
 
         # --- State: PREPARING ---
         if self.pinch_state == PinchState.PREPARING:
             if not is_pinching:
-                # Thả sớm → Click (pinch ngắn < hold_threshold)
                 self.pinch_state = PinchState.IDLE
+                self._pinch_stable_count = 0
 
-                if cooldown_passed(self._left_click_time, cfg.CLICK_COOLDOWN, now):
+                if cooldown_passed(self._left_click_time, eff_click_cd, now):
                     self._left_click_time = now
-                    self._post_action_time = now  # Post-action cooldown
+                    self._post_action_time = now
                     self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
 
-                    # Double Click detection
-                    if (self._waiting_double and
+                    # Double Click — respects DEMO_MODE guard
+                    if (_is_gesture_enabled('double_click') and
+                            self._waiting_double and
                             (now - self._first_click_time) <= cfg.DOUBLE_CLICK_TIME_WINDOW):
-                        # Click lần 2 trong cửa sổ → Double Click!
                         self._waiting_double = False
                         self._first_click_time = 0
                         return GESTURE_DOUBLE_CLICK
                     else:
-                        # Click lần 1 (hoặc hết time window) → Left Click
                         self._first_click_time = now
-                        self._waiting_double = True
+                        self._waiting_double = _is_gesture_enabled('double_click')
                         return GESTURE_LEFT_CLICK
 
                 return None
 
-            # Vẫn đang pinch → kiểm tra đủ lâu chưa
             hold_duration = now - self._pinch_start_time
-            if hold_duration >= cfg.PINCH_HOLD_THRESHOLD:
-                self.pinch_state = PinchState.DRAGGING
-                self._waiting_double = False  # Cancel double click nếu đang chờ
-                return GESTURE_DRAG_START
+            if hold_duration >= eff_hold:
+                if _is_gesture_enabled('drag'):
+                    self.pinch_state = PinchState.DRAGGING
+                    self._waiting_double = False
+                    return GESTURE_DRAG_START
+                # Drag disabled: keep PREPARING, will click on release
 
             return None
 
@@ -444,8 +482,8 @@ class GestureRecognizer:
             if not is_pinching:
                 self.pinch_state = PinchState.IDLE
                 self._post_action_time = now
+                self._pinch_stable_count = 0
                 return GESTURE_DRAG_END
-
             return GESTURE_DRAGGING
 
         return None
@@ -484,29 +522,41 @@ class GestureRecognizer:
         # GUARD: Zoom mode active -> skip
         if self._zoom_active:
             self._right_click_was_pinching = False
+            self._right_click_stable_count = 0
             return None
 
-        # --- Khi CHUA tracking: form check de bat dau ---
+        stable_needed = getattr(cfg, 'RIGHT_CLICK_STABLE_FRAMES', 4)
+        rc_cooldown = getattr(cfg, 'RIGHT_CLICK_COOLDOWN', 1.0)
+        eff_rc_cd = _get_effective_cooldown(rc_cooldown)
+
+        # --- Khi CHUA tracking: form check + stable frames ---
         if not self._right_click_was_pinching:
             # middle phai gio, ring+pinky phai cup
             if not (fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0):
+                self._right_click_stable_count = 0
                 return None
-            # Thumb-middle dominance: thumb phai gan middle hon index
-            # Neu thumb gan index hon -> do la pinch/zoom, khong phai right click
+            # Thumb-middle dominance
             if thumb_middle_dist >= thumb_index_dist:
+                self._right_click_stable_count = 0
                 return None
-            # Check pinch enter
+            # Check pinch enter + stable frames
             if thumb_middle_dist < enter_threshold:
-                self._right_click_was_pinching = True
+                self._right_click_stable_count += 1
+                if self._right_click_stable_count >= stable_needed:
+                    self._right_click_was_pinching = True
+                    self._right_click_stable_count = 0
+            else:
+                self._right_click_stable_count = 0
             return None
 
-        # --- Dang tracking: chi theo distance, bo qua finger flicker ---
+        # --- Dang tracking: chi theo distance ---
         is_pinching = thumb_middle_dist < exit_threshold
 
         # Edge detection: THA pinch -> trigger right click
         if not is_pinching:
             self._right_click_was_pinching = False
-            if cooldown_passed(self._right_click_time, cfg.CLICK_COOLDOWN, now):
+            self._right_click_stable_count = 0
+            if cooldown_passed(self._right_click_time, eff_rc_cd, now):
                 self._right_click_time = now
                 self._post_action_time = now
                 self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
@@ -718,8 +768,8 @@ class GestureRecognizer:
         self._zoom_frame_count = 0
         self.click_anchor_pos = None
         self._click_freeze_until = 0
-        # Lưu ý: KHÔNG reset _five_fingers_start và _toggle_active ở đây
-        # Toggle phải tự quản lý state để hoạt động cả khi system OFF
+        self._pinch_stable_count = 0
+        self._right_click_stable_count = 0
         self._prev_index_pos = None
         self._prev_hand_center = None
 
@@ -780,6 +830,7 @@ class PrimaryHandRecognizer:
         self._left_click_time = 0
         self._is_pinching_prev = False
         self.click_anchor_pos = None
+        self._pinch_stable_count = 0    # Stable frames counter
 
         # --- Double Click ---
         self._first_click_time = 0
@@ -788,6 +839,7 @@ class PrimaryHandRecognizer:
         # --- Right Click ---
         self._right_click_time = 0
         self._right_click_was_pinching = False
+        self._right_click_stable_count = 0  # Stable frames counter
 
         # --- Scroll ---
         self._scroll_prev_y = None
@@ -819,9 +871,9 @@ class PrimaryHandRecognizer:
             self._reset_states()
             return result
 
-        # Post-action cooldown
-        if not cooldown_passed(self._post_action_time,
-                               cfg.POST_ACTION_COOLDOWN, now):
+        # Post-action cooldown (respects DEMO_MODE multiplier)
+        eff_pac = _get_effective_cooldown(cfg.POST_ACTION_COOLDOWN, is_post_action=True)
+        if not cooldown_passed(self._post_action_time, eff_pac, now):
             in_active_flow = (
                 self.pinch_state == PinchState.DRAGGING or
                 self.pinch_state == PinchState.PREPARING or
@@ -859,25 +911,31 @@ class PrimaryHandRecognizer:
             return result
 
         # --- RIGHT CLICK ---
-        right_click_result = self._check_right_click(
-            fingers, thumb_middle_dist, thumb_index_dist,
-            pinch_enter, pinch_exit, now
-        )
-        if right_click_result is not None:
-            result["gesture"] = right_click_result
-            self.click_anchor_pos = middle_tip
-            result["click_anchor"] = self.click_anchor_pos
-            result["click_freeze_until"] = self._click_freeze_until
-            self.current_gesture = right_click_result
-            return result
+        if _is_gesture_enabled('right_click'):
+            right_click_result = self._check_right_click(
+                fingers, thumb_middle_dist, thumb_index_dist,
+                pinch_enter, pinch_exit, now
+            )
+            if right_click_result is not None:
+                result["gesture"] = right_click_result
+                self.click_anchor_pos = middle_tip
+                result["click_anchor"] = self.click_anchor_pos
+                result["click_freeze_until"] = self._click_freeze_until
+                self.current_gesture = right_click_result
+                return result
+        else:
+            # Right click disabled: reset tracking state
+            self._right_click_was_pinching = False
+            self._right_click_stable_count = 0
 
         # --- SCROLL ---
-        scroll_result = self._check_scroll(fingers, landmark_list)
-        if scroll_result is not None:
-            result["gesture"] = scroll_result[0]
-            result["scroll_delta"] = scroll_result[1]
-            self.current_gesture = scroll_result[0]
-            return result
+        if _is_gesture_enabled('scroll'):
+            scroll_result = self._check_scroll(fingers, landmark_list)
+            if scroll_result is not None:
+                result["gesture"] = scroll_result[0]
+                result["scroll_delta"] = scroll_result[1]
+                self.current_gesture = scroll_result[0]
+                return result
 
         # --- MOVE CURSOR ---
         # Guard: không move khi pinch đang PREPARING (tránh cursor jitter trước click)
@@ -901,6 +959,7 @@ class PrimaryHandRecognizer:
         # Guard: middle up -> skip pinch (nhu cu, nhung tren primary
         # khong co zoom nen chi la safety)
         if fingers[2] == 1 and self.pinch_state != PinchState.DRAGGING:
+            self._pinch_stable_count = 0
             return None
 
         if self._is_pinching_prev:
@@ -909,42 +968,62 @@ class PrimaryHandRecognizer:
             is_pinching = thumb_index_dist < enter_threshold
         self._is_pinching_prev = is_pinching
 
+        # Effective cooldown/threshold for DEMO_MODE
+        eff_click_cd = _get_effective_cooldown(cfg.CLICK_COOLDOWN)
+        eff_hold = (getattr(cfg, 'DEMO_PINCH_HOLD_THRESHOLD', cfg.PINCH_HOLD_THRESHOLD)
+                    if getattr(cfg, 'DEMO_MODE', False) else cfg.PINCH_HOLD_THRESHOLD)
+        stable_needed = getattr(cfg, 'PINCH_STABLE_FRAMES', 2)
+
         if self.pinch_state == PinchState.IDLE:
             if is_pinching and fingers[1] == 1:
-                self.pinch_state = PinchState.PREPARING
-                self._pinch_start_time = now
-                self.click_anchor_pos = index_tip
+                self._pinch_stable_count += 1
+                if self._pinch_stable_count >= stable_needed:
+                    self.pinch_state = PinchState.PREPARING
+                    self._pinch_start_time = now
+                    self.click_anchor_pos = index_tip
+                    self._pinch_stable_count = 0
+            else:
+                self._pinch_stable_count = 0
             return None
 
         if self.pinch_state == PinchState.PREPARING:
             if not is_pinching:
                 self.pinch_state = PinchState.IDLE
-                if cooldown_passed(self._left_click_time, cfg.CLICK_COOLDOWN, now):
+                self._pinch_stable_count = 0
+                if cooldown_passed(self._left_click_time, eff_click_cd, now):
                     self._left_click_time = now
                     self._post_action_time = now
                     self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
-                    if (self._waiting_double and
+                    # Double Click detection — respects DEMO_MODE guard
+                    if (_is_gesture_enabled('double_click') and
+                            self._waiting_double and
                             (now - self._first_click_time) <= cfg.DOUBLE_CLICK_TIME_WINDOW):
                         self._waiting_double = False
                         self._first_click_time = 0
                         return GESTURE_DOUBLE_CLICK
                     else:
                         self._first_click_time = now
-                        self._waiting_double = True
+                        self._waiting_double = _is_gesture_enabled('double_click')
                         return GESTURE_LEFT_CLICK
                 return None
 
             hold_duration = now - self._pinch_start_time
-            if hold_duration >= cfg.PINCH_HOLD_THRESHOLD:
-                self.pinch_state = PinchState.DRAGGING
-                self._waiting_double = False
-                return GESTURE_DRAG_START
+            if hold_duration >= eff_hold:
+                # Drag guard — DEMO_MODE can disable drag
+                if _is_gesture_enabled('drag'):
+                    self.pinch_state = PinchState.DRAGGING
+                    self._waiting_double = False
+                    return GESTURE_DRAG_START
+                else:
+                    # Drag disabled: keep PREPARING, will click on release
+                    pass
             return None
 
         if self.pinch_state == PinchState.DRAGGING:
             if not is_pinching:
                 self.pinch_state = PinchState.IDLE
                 self._post_action_time = now
+                self._pinch_stable_count = 0
                 return GESTURE_DRAG_END
             return GESTURE_DRAGGING
 
@@ -953,19 +1032,31 @@ class PrimaryHandRecognizer:
     def _check_right_click(self, fingers, thumb_middle_dist, thumb_index_dist,
                            enter_threshold, exit_threshold, now):
         # Khong can guard zoom vi primary khong co zoom
+        stable_needed = getattr(cfg, 'RIGHT_CLICK_STABLE_FRAMES', 4)
+        rc_cooldown = getattr(cfg, 'RIGHT_CLICK_COOLDOWN', 1.0)
+        eff_rc_cd = _get_effective_cooldown(rc_cooldown)
+
         if not self._right_click_was_pinching:
             if not (fingers[2] == 1 and fingers[3] == 0 and fingers[4] == 0):
+                self._right_click_stable_count = 0
                 return None
             if thumb_middle_dist >= thumb_index_dist:
+                self._right_click_stable_count = 0
                 return None
             if thumb_middle_dist < enter_threshold:
-                self._right_click_was_pinching = True
+                self._right_click_stable_count += 1
+                if self._right_click_stable_count >= stable_needed:
+                    self._right_click_was_pinching = True
+                    self._right_click_stable_count = 0
+            else:
+                self._right_click_stable_count = 0
             return None
 
         is_pinching = thumb_middle_dist < exit_threshold
         if not is_pinching:
             self._right_click_was_pinching = False
-            if cooldown_passed(self._right_click_time, cfg.CLICK_COOLDOWN, now):
+            self._right_click_stable_count = 0
+            if cooldown_passed(self._right_click_time, eff_rc_cd, now):
                 self._right_click_time = now
                 self._post_action_time = now
                 self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
@@ -1012,9 +1103,11 @@ class PrimaryHandRecognizer:
         self._is_pinching_prev = False
         self._scroll_prev_y = None
         self._right_click_was_pinching = False
+        self._right_click_stable_count = 0
         self._waiting_double = False
         self.click_anchor_pos = None
         self._click_freeze_until = 0
+        self._pinch_stable_count = 0
         self.current_gesture = GESTURE_NONE
 
 
@@ -1091,14 +1184,15 @@ class SecondaryHandRecognizer:
             self._prev_hand_center = hand_center
             return result
 
-        # --- TOGGLE (luon check) ---
-        toggle_result = self._check_system_toggle(fingers, hand_center, now)
-        if toggle_result is not None:
-            result["gesture"] = toggle_result
-            result["system_active"] = self.system_active
-            self.current_gesture = toggle_result
-            self._prev_hand_center = hand_center
-            return result
+        # --- TOGGLE (luon check, nhung DEMO_MODE co the tat) ---
+        if _is_gesture_enabled('system_toggle'):
+            toggle_result = self._check_system_toggle(fingers, hand_center, now)
+            if toggle_result is not None:
+                result["gesture"] = toggle_result
+                result["system_active"] = self.system_active
+                self.current_gesture = toggle_result
+                self._prev_hand_center = hand_center
+                return result
 
         # Neu system OFF -> chi hien Open Palm
         if not self.system_active:
@@ -1109,14 +1203,15 @@ class SecondaryHandRecognizer:
             self._prev_hand_center = hand_center
             return result
 
-        # --- VOICE TRIGGER (chi khi system ON) ---
+        # --- VOICE TRIGGER (chi khi system ON va duoc bat) ---
         # _reset_states() phia tren da clear active/start_time khi system OFF.
-        if getattr(cfg, "ENABLE_GESTURE_VOICE_TRIGGER", False):
+        if (getattr(cfg, "ENABLE_GESTURE_VOICE_TRIGGER", False) and
+                _is_gesture_enabled('voice_trigger_g')):
             self._check_voice_trigger(fingers, now)
 
-        # Post-action cooldown
-        if not cooldown_passed(self._post_action_time,
-                               cfg.POST_ACTION_COOLDOWN, now):
+        # Post-action cooldown (respects DEMO_MODE multiplier)
+        eff_pac = _get_effective_cooldown(cfg.POST_ACTION_COOLDOWN, is_post_action=True)
+        if not cooldown_passed(self._post_action_time, eff_pac, now):
             self.current_gesture = GESTURE_NONE
             self._prev_hand_center = hand_center
             return result
@@ -1132,21 +1227,23 @@ class SecondaryHandRecognizer:
         pinch_enter = self._get_pinch_threshold(palm_size)
 
         # --- ZOOM (uu tien truoc swipe) ---
-        zoom_result = self._check_zoom(fingers, thumb_index_dist,
-                                        thumb_middle_dist, pinch_enter, now)
-        if zoom_result is not None:
-            result["gesture"] = zoom_result
-            self.current_gesture = zoom_result
-            self._prev_hand_center = hand_center
-            return result
+        if _is_gesture_enabled('zoom'):
+            zoom_result = self._check_zoom(fingers, thumb_index_dist,
+                                            thumb_middle_dist, pinch_enter, now)
+            if zoom_result is not None:
+                result["gesture"] = zoom_result
+                self.current_gesture = zoom_result
+                self._prev_hand_center = hand_center
+                return result
 
         # --- SWIPE ---
-        swipe_result = self._check_swipe(fingers, hand_center, now)
-        if swipe_result is not None:
-            result["gesture"] = swipe_result
-            self.current_gesture = swipe_result
-            self._prev_hand_center = hand_center
-            return result
+        if _is_gesture_enabled('swipe'):
+            swipe_result = self._check_swipe(fingers, hand_center, now)
+            if swipe_result is not None:
+                result["gesture"] = swipe_result
+                self.current_gesture = swipe_result
+                self._prev_hand_center = hand_center
+                return result
 
         self.current_gesture = GESTURE_NONE
         self._prev_hand_center = hand_center

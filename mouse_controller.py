@@ -41,10 +41,11 @@ class MouseController:
         is_dragging: Trạng thái đang kéo-thả
     """
 
-    def __init__(self, smoothing_factor=cfg.SMOOTHING_FACTOR, action_router=None,
+    def __init__(self, smoothing_factor=None, action_router=None,
                  event_logger=None):
         self.screen_w, self.screen_h = pyautogui.size()
-        self.smoothing_factor = smoothing_factor
+        self.smoothing_factor = smoothing_factor or getattr(
+            cfg, 'CURSOR_SMOOTHING', cfg.SMOOTHING_FACTOR)
         self.prev_x = self.screen_w // 2
         self.prev_y = self.screen_h // 2
         self.is_dragging = False
@@ -153,8 +154,9 @@ class MouseController:
             self.zoom_out()
 
     def move_cursor(self, camera_pos, click_freeze_until=0):
-        """Di chuyển chuột với smoothing + ROI mapping + deadzone + freeze."""
+        """Di chuyển chuột với smoothing + ROI mapping + deadzone + freeze + jump clamp."""
         import time as _time
+        import math as _math
 
         # Freeze: không move nếu đang trong khoảng freeze sau click
         now = _time.time()
@@ -174,6 +176,17 @@ class MouseController:
         screen_y = map_range(cam_y, cfg.ROI_Y_MIN, cfg.ROI_Y_MAX,
                              0, self.screen_h)
 
+        # --- MAX_CURSOR_JUMP clamp ---
+        # Khi landmark nhay dot ngot, clamp huong di chuyen thay vi bo frame
+        max_jump = getattr(cfg, 'MAX_CURSOR_JUMP', 200)
+        dx_raw = screen_x - self.prev_x
+        dy_raw = screen_y - self.prev_y
+        jump_dist = _math.sqrt(dx_raw * dx_raw + dy_raw * dy_raw)
+        if jump_dist > max_jump and jump_dist > 0:
+            scale = max_jump / jump_dist
+            screen_x = self.prev_x + dx_raw * scale
+            screen_y = self.prev_y + dy_raw * scale
+
         # Smoothing
         smooth_x, smooth_y = smooth_point(
             self.prev_x, self.prev_y,
@@ -186,9 +199,10 @@ class MouseController:
         smooth_y = clamp(int(smooth_y), 0, self.screen_h - 1)
 
         # Deadzone: không move nếu target quá gần current (đứng yên → giảm rung)
+        deadzone = getattr(cfg, 'CURSOR_DEADZONE', cfg.MOVE_DEADZONE)
         dx = abs(smooth_x - self.prev_x)
         dy = abs(smooth_y - self.prev_y)
-        if dx <= cfg.MOVE_DEADZONE and dy <= cfg.MOVE_DEADZONE:
+        if dx <= deadzone and dy <= deadzone:
             return
 
         pyautogui.moveTo(smooth_x, smooth_y)
