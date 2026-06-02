@@ -82,10 +82,13 @@ SCROLL_SENSITIVITY = 10             # Ngưỡng di chuyển tối thiểu theo t
 
 # --- Swipe (trình chiếu: next/prev slide) ---
 SWIPE_MIN_FINGERS = 4               # Số ngón tối thiểu phải giơ để nhận swipe
-SWIPE_THRESHOLD_X = 80              # Di chuyển ngang tối thiểu để trigger swipe (pixels)
+SWIPE_THRESHOLD_X = 110              # Di chuyển ngang tối thiểu để trigger swipe (pixels)
+                                     # Tang 80 -> 110 de can vuot ro rang hon
 SWIPE_TIME_WINDOW = 0.5             # Thời gian tối đa cho 1 lần swipe (giây)
-SWIPE_COOLDOWN = 0.8                # Cooldown giữa các lần swipe (giây)
-SWIPE_STABLE_FRAMES = 2             # Số frame liên tục thỏa điều kiện mới bắt đầu tracking
+SWIPE_COOLDOWN = 1.2                # Cooldown giữa các lần swipe (giây)
+                                     # Tang 0.8 -> 1.2 de tay co du thoi gian thu ve
+SWIPE_STABLE_FRAMES = 3             # Số frame liên tục thỏa điều kiện mới bắt đầu tracking
+                                     # Tang 2 -> 3 de chong re-trigger
 SWIPE_MODE = "auto"                 # Chon che do swipe:
                                     #   "auto"    = tu dong detect theo cua so dang active
                                     #   "slide"   = ep che do slide (PowerPoint, Slides)
@@ -285,13 +288,16 @@ CONTEXT_STICKY_SECONDS = 2.0    # Giu context cu khi cua so tam ve default (giay
 # --- Swipe V2: State Machine + Movement Buffer ---
 # Nếu ENABLE_SWIPE_V2 = False thì dùng logic Swipe cũ (legacy)
 ENABLE_SWIPE_V2              = True   # Bat Swipe V2 State Machine
-SWIPE_V2_POSE_STABLE_FRAMES  = 2      # So frame gio pose on dinh truoc khi ARMED (3->2: arm nhanh hon 1 frame)
-SWIPE_V2_MIN_DISTANCE_X      = 60     # Khoang cach ngang toi thieu de trigger (pixels)
+SWIPE_V2_POSE_STABLE_FRAMES  = 4      # So frame gio pose on dinh truoc khi ARMED
+                                       # Tang 2 -> 4: can 160ms moi ARM lai, chong re-trigger
+SWIPE_V2_MIN_DISTANCE_X      = 80     # Khoang cach ngang toi thieu de trigger (pixels)
+                                       # Tang 60 -> 80: can vuot ro rang hon
 SWIPE_V2_MAX_TIME            = 0.9    # Thoi gian toi da cho 1 swipe (giay)
 SWIPE_V2_MIN_TIME            = 0.12   # Thoi gian toi thieu (loai bo chuyen dong giat)
 SWIPE_V2_MIN_VELOCITY_X      = 120    # Toc do ngang toi thieu (pixels/giay)
 SWIPE_V2_LOST_GRACE_FRAMES   = 4      # Frame cho phep mat pose truoc khi reset
-SWIPE_V2_COOLDOWN            = 0.5    # Cooldown giua cac lan swipe (giay) (0.7->0.5: giam 200ms/cycle)
+SWIPE_V2_COOLDOWN            = 1.2    # Cooldown giua cac lan swipe (giay)
+                                       # Tang 0.5 -> 1.2: du thoi gian thu tay ve
 SWIPE_V2_INVERT_DIRECTION    = False  # True = dao huong (dung khi cam bi nguoc)
 SWIPE_V2_DEBUG               = False  # Luu debug info (tat de giam dict allocation per-frame)
 
