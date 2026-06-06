@@ -247,13 +247,14 @@ VOICE_AUTO_ENTER = False            # True = tu nhan Enter sau khi go xong text
 
 # --- Cấu hình STT chung (dùng cho cả 2 mode) ---
 VOICE_LANGUAGE = "vi-VN"            # Ngôn ngữ nhận diện giọng nói (vi-VN / en-US / ja-JP ...)
-VOICE_LISTEN_TIMEOUT = 5            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
+VOICE_LISTEN_TIMEOUT = 7            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
                                     # Nếu im lặng quá lâu → VOICE_ERROR
 VOICE_PHRASE_TIME_LIMIT = 30        # Thời gian tối đa cho 1 câu nói (giây)
                                     # Sau thời gian này tự cắt và gửi STT
 VOICE_TYPING_SPEED = 0.02          # Delay trước khi paste (giây)
 VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
 COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)
+VOICE_TEXT_APPEND_SPACE = True      # True = them 1 dau cach sau text khi nhap bang giong noi
 
 
 # ==============================================================================
@@ -372,7 +373,7 @@ VOICE_COMMAND_PRINT_RESULT = True  # True = in ket qua parse/execute ra console
 # ==============================================================================
 ENABLE_GESTURE_VOICE_TRIGGER = True         # True = bat tinh nang nay
 VOICE_TRIGGER_POSE           = [0, 1, 1, 1, 0]  # cai cụp, tro/giua/ap-ut duoi, ut cụp
-VOICE_TRIGGER_HOLD_SECS      = 1.2          # Giay phai giu pose de trigger
+VOICE_TRIGGER_HOLD_SECS      = 1.5          # Giay phai giu pose de trigger (tang de tranh fire nham)
 VOICE_TRIGGER_COOLDOWN       = 3.0          # Giay khong trigger lai sau khi fired
 
 # ==============================================================================
@@ -399,7 +400,7 @@ DEMO_ENABLE_DOUBLE_CLICK    = False  # Demo: tat double click de tranh nham
 DEMO_ENABLE_DRAG            = False  # Demo: tat drag de tranh loi
 DEMO_ENABLE_RIGHT_CLICK     = False  # Demo: tat right click de tranh mo menu
 DEMO_ENABLE_ZOOM            = False  # Demo: tat zoom de tranh tu kich hoat
-DEMO_ENABLE_VOICE_TRIGGER_G = False  # Demo: tat voice trigger gesture
+DEMO_ENABLE_VOICE_TRIGGER_G = True   # Demo: bat voice trigger gesture (de demo cu chi + giong noi)
 DEMO_ENABLE_SWIPE           = True   # Demo: giu swipe (on dinh)
 DEMO_ENABLE_SCROLL          = True   # Demo: giu scroll (on dinh)
 DEMO_ENABLE_SYSTEM_TOGGLE   = True   # Demo: giu system toggle
@@ -408,6 +409,14 @@ DEMO_ENABLE_SYSTEM_TOGGLE   = True   # Demo: giu system toggle
 DEMO_COOLDOWN_MULTIPLIER      = 1.5  # Tang cooldown x1.5 khi demo
 DEMO_POST_ACTION_MULTIPLIER   = 2.0  # Tang post-action cooldown x2 khi demo
 DEMO_PINCH_HOLD_THRESHOLD     = 1.20 # Pinch hold lau hon khi demo (1.2s, ko bao gio drag)
+
+# --- Voice Demo Safe Mode ---
+# Khi True: chi cho phep cac voice command trong safe whitelist
+# Command ngoai whitelist bi block, khong execute
+VOICE_DEMO_SAFE_MODE = True
+# Khi True: neu cau noi khong phai command thi van go text vao o dang focus
+# Khi False: chan ca typing, chi cho phep command trong whitelist
+VOICE_SAFE_ALLOW_TEXT_FALLBACK = True
 
 # ==============================================================================
 # Section 15: CURSOR STABILITY — Tham so on dinh con tro

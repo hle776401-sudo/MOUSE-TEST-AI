@@ -701,10 +701,22 @@ def main():
                 print("[VOICE_CMD] System OFF via voice command")
 
             voice_intent_parser = VoiceIntentParser()
+
+            def _get_voice_context():
+                """Callback tra ve context hien tai cho Voice Command."""
+                if context_manager is not None:
+                    try:
+                        return context_manager.get_current_context()
+                    except Exception:
+                        pass
+                return "default"
+
             voice_cmd_executor  = VoiceCommandExecutor(
                 dry_run=getattr(cfg, "VOICE_COMMAND_DRY_RUN", False),
                 system_on_callback=_voice_system_on,
                 system_off_callback=_voice_system_off,
+                context_getter=_get_voice_context,
+                demo_safe_mode=getattr(cfg, "VOICE_DEMO_SAFE_MODE", False),
             )
         except Exception as _vcmd_init_err:
             print(f"  [WARN] Voice Command init failed: {_vcmd_init_err} -- disabled")
@@ -718,6 +730,7 @@ def main():
         voice_thread = None             # Thread hien tai (None = chua chay)
         voice_state = VoiceState.IDLE   # State hien thi tren UI
         voice_result_text = ""          # Text nhan duoc gan nhat
+        _last_voice_was_text = False    # True neu lan voice truoc la text (de them space)
 
         def _on_voice_hotkey():
             """Callback khi nguoi dung nhan global hotkey."""
@@ -731,7 +744,7 @@ def main():
             print(f"[VOICE] Triggered via {cfg.VOICE_HOTKEY} — listening...")
 
             def _voice_worker():
-                nonlocal voice_state, voice_result_text
+                nonlocal voice_state, voice_result_text, _last_voice_was_text
                 result = voice_manager.listen_and_recognize()
                 if result["state"] == VoiceState.DONE:
                     raw_text = result["text"]
@@ -748,26 +761,79 @@ def main():
 
                             if intent["type"] == "command":
                                 ok = voice_cmd_executor.execute(intent)
+                                _cmd_ctx = getattr(voice_cmd_executor, 'last_context', 'default')
                                 if ok:
-                                    print(f"[VOICE_CMD] Executed: {intent['intent']}")
+                                    print(f"[VOICE_CMD] Executed: {intent['intent']} (ctx={_cmd_ctx})")
+                                    voice_result_text = f"CMD: {intent['intent']} ({_cmd_ctx})"
                                 else:
                                     print(f"[VOICE_CMD] Failed/skipped: {intent['intent']}")
-                                voice_result_text = f"CMD: {intent['intent']}"
+                                    voice_result_text = f"CMD: {intent['intent']} (blocked)"
                                 _handled_as_command = True
+
+                                # Reset spacing state khi newline/new_paragraph
+                                if intent['intent'] in ('newline', 'new_paragraph'):
+                                    _last_voice_was_text = False
+
+                                # --- Log Voice Command vao CSV ---
+                                try:
+                                    _log_main_event(
+                                        gesture="Voice Command",
+                                        action=intent['intent'],
+                                        executed=ok,
+                                        note=f"voice_command|text={raw_text[:30]}|ctx={_cmd_ctx}",
+                                    )
+                                except Exception:
+                                    pass
+
                         except Exception as _vcmd_err:
                             print(f"[VOICE_CMD] Error: {_vcmd_err} -- fallback to text")
 
                     # --- Text mode (fallback hoac khong co command mode) ---
                     if not _handled_as_command:
-                        controller.type_text(raw_text)
-                        if cfg.VOICE_AUTO_ENTER:
-                            time.sleep(0.5)
-                            controller.press_enter()
-                            print("[VOICE] Auto Enter")
+                        _safe_mode = getattr(cfg, "VOICE_DEMO_SAFE_MODE", False)
+                        _allow_text = getattr(cfg, "VOICE_SAFE_ALLOW_TEXT_FALLBACK", True)
+
+                        if _safe_mode and not _allow_text:
+                            # Chan typing hoan toan
+                            print(f"[VOICE] Safe mode (no text): '{raw_text}' — bo qua")
+                            voice_result_text = f"'{raw_text[:20]}' — khong nhan lenh"
+                            try:
+                                _log_main_event(
+                                    gesture="Voice Text",
+                                    action="blocked",
+                                    executed=False,
+                                    note=f"blocked_demo|text={raw_text[:30]}",
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            # Cho phep nhap text (che do thuong hoac safe+allow_text)
+                            _text_to_type = raw_text.strip()
+                            if _text_to_type:
+                                # Them dau cach dau neu lan truoc cung la text (chong dinh chu)
+                                _punct_start = _text_to_type[0] in '.,;:!?)]}>'
+                                if _last_voice_was_text and not _punct_start:
+                                    _text_to_type = " " + _text_to_type
+                                controller.type_text(_text_to_type)
+                                _last_voice_was_text = True
+                            if cfg.VOICE_AUTO_ENTER:
+                                time.sleep(0.5)
+                                controller.press_enter()
+                                print("[VOICE] Auto Enter")
+                            voice_result_text = f"TEXT: {raw_text[:25]}"
+                            try:
+                                _log_main_event(
+                                    gesture="Voice Text",
+                                    action="type_text",
+                                    executed=True,
+                                    note=f"voice_text|text={raw_text[:30]}",
+                                )
+                            except Exception:
+                                pass
 
                     voice_state = VoiceState.DONE
                 else:
-                    voice_result_text = ""
+                    voice_result_text = result.get("error", "")
                     voice_state = VoiceState.ERROR
                     print(f"[VOICE] Error: {result['error']}")
 
@@ -844,6 +910,40 @@ def main():
     print("=" * 50)
     print("  Press 'q' to quit | 's' to toggle control | 'd' to toggle DEMO")
     print("=" * 50)
+
+    # --- Helper log event khong qua controller (toggle, demo, blocked) ---
+    def _log_main_event(gesture, action="", executed=True, note=""):
+        """Log event truc tiep trong main.py (khong qua mouse_controller)."""
+        if gesture_logger is None:
+            return
+        try:
+            runtime_mode = current_mode if current_mode != "INIT" else "ONE_HAND"
+            ctx = "default"
+            if context_manager is not None:
+                try: ctx = context_manager.get_current_context() or "default"
+                except: ctx = "default"
+            wt = ""
+            if context_manager is not None:
+                try: wt = context_manager.get_current_window_title() or ""
+                except: wt = ""
+            gesture_logger.log_event(
+                mode=runtime_mode,
+                system_active=system_active,
+                context=ctx,
+                window_title=wt,
+                gesture=gesture,
+                action=action,
+                executed=executed,
+                fps=fps,
+                note=note,
+            )
+        except Exception:
+            pass
+
+    # --- Blocked gesture logging cooldown (tranh spam) ---
+    import time as _time_mod
+    _blocked_log_cooldown = {}       # {gesture_name: last_log_timestamp}
+    _BLOCKED_LOG_INTERVAL = 3.0      # Chi log moi 3 giay cho cung 1 gesture bi block
 
     # --- Tao cua so OpenCV co kich thuoc co dinh ---
     cv2.namedWindow(cfg.WINDOW_NAME, cv2.WINDOW_NORMAL)
@@ -1016,6 +1116,12 @@ def main():
                                                       GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT):
                     print(f"[DISPATCH] BLOCKED (system OFF): {sec_g}")
 
+                # Log System Toggle khi detect
+                if sec_g == GESTURE_SYSTEM_TOGGLE:
+                    state = "ON" if system_active else "OFF"
+                    _log_main_event("System Toggle", f"system_{state.lower()}",
+                                    True, "toggle")
+
                 # Event gestures uu tien hien thi
                 if sec_g in EVENT_GESTURES or sec_g in (GESTURE_ZOOM_IN, GESTURE_ZOOM_OUT,
                                                          GESTURE_SYSTEM_TOGGLE, GESTURE_OPEN_PALM):
@@ -1100,6 +1206,12 @@ def main():
                         }
                         controller.process_gesture(sec_action)
 
+                    # Log System Toggle trong grace
+                    if sec_gesture == GESTURE_SYSTEM_TOGGLE:
+                        state = "ON" if system_active else "OFF"
+                        _log_main_event("System Toggle", f"system_{state.lower()}",
+                                        True, "toggle")
+
                     current_gesture = sec_gesture if sec_gesture != GESTURE_NONE else GESTURE_NONE
                     detector.draw_custom_landmarks(frame)
 
@@ -1182,6 +1294,12 @@ def main():
                             "click_freeze_until": 0,
                         }
                         controller.process_gesture(sec_action)
+
+                    # Log System Toggle trong fallback
+                    if sec_gesture == GESTURE_SYSTEM_TOGGLE:
+                        state = "ON" if system_active else "OFF"
+                        _log_main_event("System Toggle", f"system_{state.lower()}",
+                                        True, "toggle")
 
                     current_gesture = sec_gesture if sec_gesture != GESTURE_NONE else GESTURE_NONE
 
@@ -1372,9 +1490,13 @@ def main():
                                 (10, cfg.CAMERA_HEIGHT - 45),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, v_color, 2)
                 elif voice_state == VoiceState.ERROR:
-                    cv2.putText(frame, f"[MIC] Error ({cfg.VOICE_HOTKEY.upper()} to retry)",
+                    _err_detail = voice_result_text[:30] if voice_result_text else "unknown"
+                    cv2.putText(frame, f"[MIC] Error: {_err_detail}",
                                 (10, cfg.CAMERA_HEIGHT - 45),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.COLOR_DANGER, 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.40, cfg.COLOR_DANGER, 1)
+                    cv2.putText(frame, f"({cfg.VOICE_HOTKEY.upper()} to retry)",
+                                (10, cfg.CAMERA_HEIGHT - 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, cfg.COLOR_DANGER, 1)
                 elif voice_state == VoiceState.DONE and voice_result_text:
                     cv2.putText(frame, f"[MIC] Done: {voice_result_text[:35]}",
                                 (10, cfg.CAMERA_HEIGHT - 45),
@@ -1393,11 +1515,16 @@ def main():
                 coordinator.system_active = not coordinator.system_active
                 state = "ON" if coordinator.system_active else "OFF"
                 print(f"[KEY] System {state}")
+                _log_main_event("System Toggle", f"system_{state.lower()}",
+                                True, "toggle_key")
                 if state == "OFF" and controller.is_dragging:
                     controller.drag_end()
             elif key == ord('d') or key == ord('D'):
                 cfg.DEMO_MODE = not cfg.DEMO_MODE
-                print(f"[KEY] DEMO_MODE {'ON' if cfg.DEMO_MODE else 'OFF'}")
+                demo_state = 'ON' if cfg.DEMO_MODE else 'OFF'
+                print(f"[KEY] DEMO_MODE {demo_state}")
+                _log_main_event(f"DEMO_MODE {demo_state}",
+                                f"demo_{demo_state.lower()}", True, "demo_toggle")
 
             # (Voice duoc xu ly qua global hotkey, khong can cv2 key handler o day)
 
