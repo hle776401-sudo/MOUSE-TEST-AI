@@ -19,6 +19,8 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import quote_plus
 
+import pyautogui
+
 
 # ==============================================================================
 # CONSTANTS
@@ -34,6 +36,22 @@ _INTENT_WHITELIST = {
     "open_coccoc",
     "system_on",
     "system_off",
+    "next_action",
+    "previous_action",
+    "newline",
+    "new_paragraph",
+}
+
+# Whitelist an toan cho demo (VOICE_DEMO_SAFE_MODE = True)
+_DEMO_SAFE_WHITELIST = {
+    "next_action",
+    "previous_action",
+    "web_search",
+    "system_on",
+    "system_off",
+    "open_word",
+    "newline",
+    "new_paragraph",
 }
 
 # Common paths cho Chrome tren Windows
@@ -69,10 +87,15 @@ class VoiceCommandExecutor:
         dry_run: bool = False,
         system_on_callback=None,
         system_off_callback=None,
+        context_getter=None,
+        demo_safe_mode: bool = False,
     ) -> None:
         self.dry_run = dry_run
         self.system_on_callback  = system_on_callback
         self.system_off_callback = system_off_callback
+        self.context_getter      = context_getter       # callable() -> str (context)
+        self.demo_safe_mode      = demo_safe_mode       # True = chi cho phep safe whitelist
+        self.last_context        = "default"             # Context su dung lan execute gan nhat
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,6 +121,11 @@ class VoiceCommandExecutor:
             print(f"[VOICE_CMD] Intent '{intent_name}' not in whitelist — skipped.")
             return False
 
+        # Demo safe mode: chi cho phep intent an toan
+        if self.demo_safe_mode and intent_name not in _DEMO_SAFE_WHITELIST:
+            print(f"[VOICE_CMD] Intent '{intent_name}' blocked by VOICE_DEMO_SAFE_MODE.")
+            return False
+
         # Validate query bat buoc truoc khi dispatch (nhat quan ca dry_run va real mode)
         _NEEDS_QUERY = {"open_music", "web_search"}
         if intent_name in _NEEDS_QUERY and not query:
@@ -119,6 +147,10 @@ class VoiceCommandExecutor:
             "open_coccoc":  self._open_coccoc,
             "system_on":    self._system_on,
             "system_off":   self._system_off,
+            "next_action":  self._next_action,
+            "previous_action": self._previous_action,
+            "newline":      self._newline,
+            "new_paragraph": self._new_paragraph,
         }
         handler = dispatch.get(intent_name)
         if handler is None:
@@ -219,6 +251,82 @@ class VoiceCommandExecutor:
         print("[VOICE_CMD] system_off: chua co callback — skipped.")
         return False
 
+    def _get_context(self) -> str:
+        """Lay context hien tai tu context_getter callback."""
+        if self.context_getter is not None:
+            try:
+                ctx = self.context_getter()
+                if ctx:
+                    self.last_context = ctx
+                    return ctx
+            except Exception:
+                pass
+        self.last_context = "default"
+        return "default"
+
+    def _next_action(self) -> bool:
+        """Chuyen tiep / next — xu ly theo context."""
+        ctx = self._get_context()
+        try:
+            if ctx == "presentation":
+                pyautogui.press("right")
+                print(f"[VOICE_CMD] next_action: press right (presentation)")
+            elif ctx == "browser":
+                pyautogui.hotkey("alt", "right")
+                print(f"[VOICE_CMD] next_action: alt+right (browser forward)")
+            elif ctx == "document":
+                pyautogui.press("pagedown")
+                print(f"[VOICE_CMD] next_action: pagedown (document)")
+            else:
+                pyautogui.press("right")
+                print(f"[VOICE_CMD] next_action: press right (default)")
+            return True
+        except Exception as e:
+            print(f"[VOICE_CMD] next_action error: {e}")
+            return False
+
+    def _previous_action(self) -> bool:
+        """Quay lai / previous — xu ly theo context."""
+        ctx = self._get_context()
+        try:
+            if ctx == "presentation":
+                pyautogui.press("left")
+                print(f"[VOICE_CMD] previous_action: press left (presentation)")
+            elif ctx == "browser":
+                pyautogui.hotkey("alt", "left")
+                print(f"[VOICE_CMD] previous_action: alt+left (browser back)")
+            elif ctx == "document":
+                pyautogui.press("pageup")
+                print(f"[VOICE_CMD] previous_action: pageup (document)")
+            else:
+                pyautogui.press("left")
+                print(f"[VOICE_CMD] previous_action: press left (default)")
+            return True
+        except Exception as e:
+            print(f"[VOICE_CMD] previous_action error: {e}")
+            return False
+
+    def _newline(self) -> bool:
+        """Xuong dong — press Enter 1 lan."""
+        try:
+            pyautogui.press("enter")
+            print("[VOICE_CMD] newline: press enter")
+            return True
+        except Exception as e:
+            print(f"[VOICE_CMD] newline error: {e}")
+            return False
+
+    def _new_paragraph(self) -> bool:
+        """Xuong doan — press Enter 2 lan."""
+        try:
+            pyautogui.press("enter")
+            pyautogui.press("enter")
+            print("[VOICE_CMD] new_paragraph: press enter x2")
+            return True
+        except Exception as e:
+            print(f"[VOICE_CMD] new_paragraph error: {e}")
+            return False
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -303,6 +411,14 @@ class VoiceCommandExecutor:
             return "call system_on_callback()"
         if intent_name == "system_off":
             return "call system_off_callback()"
+        if intent_name == "next_action":
+            return "context-aware next (right/alt+right/pagedown)"
+        if intent_name == "previous_action":
+            return "context-aware previous (left/alt+left/pageup)"
+        if intent_name == "newline":
+            return "press enter (xuong dong)"
+        if intent_name == "new_paragraph":
+            return "press enter x2 (xuong doan)"
         return f"execute {intent_name}"
 
 

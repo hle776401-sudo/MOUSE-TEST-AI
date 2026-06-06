@@ -59,6 +59,7 @@ class MouseController:
 
         # --- Gesture Logging (optional) ---
         self.event_logger = event_logger            # GestureLogger instance hoac None
+        self._scroll_log_last_time = 0.0            # Throttle scroll log (tranh spam)
 
         # --- Runtime context (duoc cap nhat tu main loop moi frame) ---
         self.runtime_mode: str = ""                 # "TWO_HAND" / "ONE_HAND" / ...
@@ -88,6 +89,29 @@ class MouseController:
         self.runtime_system_active = system_active
         self.runtime_fps           = fps
         self.runtime_window_title  = window_title
+
+    def _log_gesture(self, gesture: str, action: str = "",
+                     executed: bool = True, note: str = "") -> None:
+        """Helper ghi log 1 gesture event. An toan khi event_logger = None."""
+        if self.event_logger is None:
+            return
+        try:
+            ctx = "default"
+            if self.action_router is not None:
+                ctx = self.action_router.get_last_context() or "default"
+            self.event_logger.log_event(
+                mode=self.runtime_mode,
+                system_active=self.runtime_system_active,
+                context=ctx,
+                window_title=self.runtime_window_title,
+                gesture=gesture,
+                action=action,
+                executed=executed,
+                fps=self.runtime_fps,
+                note=note,
+            )
+        except Exception:
+            pass  # Khong crash app
 
     def process_gesture(self, gesture_result):
         """
@@ -236,24 +260,28 @@ class MouseController:
         if anchor_cam_pos:
             self._move_to_anchor(anchor_cam_pos)
         pyautogui.click()
+        self._log_gesture("Left Click", "left_click", True, "click")
 
     def double_click(self, anchor_cam_pos=None):
         """Double click chuot trai. Move to anchor truoc neu co."""
         if anchor_cam_pos:
             self._move_to_anchor(anchor_cam_pos)
         pyautogui.doubleClick()
+        self._log_gesture("Double Click", "double_click", True, "click")
 
     def right_click(self, anchor_cam_pos=None):
         """Click chuot phai. Move to anchor truoc neu co."""
         if anchor_cam_pos:
             self._move_to_anchor(anchor_cam_pos)
         pyautogui.rightClick()
+        self._log_gesture("Right Click", "right_click", True, "click")
 
     def drag_start(self):
         """Nhấn giữ chuột trái."""
         if not self.is_dragging:
             pyautogui.mouseDown(button='left')
             self.is_dragging = True
+            self._log_gesture("Drag Start", "drag_start", True, "drag")
 
     def drag_move(self, camera_pos):
         """Di chuyển chuột trong khi đang drag."""
@@ -265,10 +293,19 @@ class MouseController:
         if self.is_dragging:
             pyautogui.mouseUp(button='left')
             self.is_dragging = False
+            self._log_gesture("Drag End", "drag_end", True, "drag")
 
     def scroll(self, amount):
         """Cuộn trang."""
         pyautogui.scroll(int(amount))
+        # Throttle log: chi ghi toi da moi 0.5 giay
+        import time as _t
+        _now = _t.time()
+        _cooldown = getattr(cfg, 'SCROLL_LOG_COOLDOWN', 0.5)
+        if (_now - self._scroll_log_last_time) >= _cooldown:
+            gesture_name = "Scroll Up" if amount > 0 else "Scroll Down"
+            self._log_gesture(gesture_name, "scroll", True, "scroll")
+            self._scroll_log_last_time = _now
 
     # ------------------------------------------------------------------
     # Context-Aware Action Executor

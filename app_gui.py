@@ -490,6 +490,11 @@ class GestureControllerApp(ctk.CTk):
             v.pack(pady=(10,2)); self._stat_labels[k]=v
             ctk.CTkLabel(ch, text=l, font=_F(10), text_color=C_TEXT2).pack(pady=(0,10))
 
+        # File info label — hien thi ten file CSV dang doc
+        self._log_file_label = ctk.CTkLabel(c1, text="\U0001F4C4 Ch\u01b0a t\u1ea3i log",
+            font=_F(10), text_color=C_TEXT2, anchor="w")
+        self._log_file_label.pack(fill="x", padx=18, pady=(0,10))
+
         # Events
         c2 = self._card(sc, "Sự kiện gần nhất", "▸"); c2.pack(fill="x", pady=(0,10))
         self._ev_ct = ctk.CTkFrame(c2, fg_color="transparent")
@@ -619,6 +624,8 @@ class GestureControllerApp(ctk.CTk):
         self._btn_stop.configure(state="disabled", fg_color=C_STOP_DIS,
             hover_color=C_STOP_DIS, text_color=C_STOP_DTX)
         self._uf("Hệ thống hoạt động ổn định")
+        # Auto-reload log sau khi dung, delay 1.5s de logger dong file
+        self.after(1500, self._refresh_analysis)
 
     def _poll_proc(self):
         if self._proc is not None and self._proc.poll() is not None: self._on_stopped()
@@ -673,10 +680,20 @@ class GestureControllerApp(ctk.CTk):
         ld = str(_BASE_DIR / _CFG_LOG_DIR)
         lt = _find_latest_log_safe(ld)
         if lt is None:
-            self._stats_empty(); self._ev_empty(); self._freq_empty(); return
+            self._stats_empty(); self._ev_empty(); self._freq_empty()
+            if hasattr(self, '_log_file_label'):
+                self._log_file_label.configure(text="\U0001F4C4 Kh\u00f4ng t\u00ecm th\u1ea5y file log")
+            return
         ev = _read_events_safe(lt)
         if not ev:
-            self._stats_empty(); self._ev_empty(); self._freq_empty(); return
+            self._stats_empty(); self._ev_empty(); self._freq_empty()
+            if hasattr(self, '_log_file_label'):
+                self._log_file_label.configure(text=f"\U0001F4C4 {Path(lt).name} (tr\u1ed1ng)")
+            return
+        # Hien thi ten file + so event
+        if hasattr(self, '_log_file_label'):
+            self._log_file_label.configure(
+                text=f"\U0001F4C4 {Path(lt).name}  \u2022  {len(ev)} s\u1ef1 ki\u1ec7n")
         self._stats_fill(ev); self._ev_fill(ev); self._freq_fill(ev)
 
     def _stats_fill(self, ev):

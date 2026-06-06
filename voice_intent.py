@@ -78,7 +78,8 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
     ("open_youtube",    ["mo youtube", "mo web youtube"], False),
 
     # --- open_word ---
-    ("open_word",       ["mo word", "mo microsoft word"], False),
+    # 'open world' la loi STT thuong gap khi noi 'open word'
+    ("open_word",       ["mo word", "mo microsoft word", "mo van ban", "open word", "open world"], False),
 
     # --- open_chrome ---
     ("open_chrome",     ["mo chrome", "mo google chrome"], False),
@@ -92,6 +93,18 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
 
     # --- web_search (needs_query=True) ---
     ("web_search",      ["tim kiem", "tra cuu", "search", "google"], True),
+
+    # --- next_action (chuyen tiep / tiep theo / trang tiep) ---
+    ("next_action",     ["chuyen tiep", "tiep theo", "trang tiep"], False),
+
+    # --- previous_action (quay lai / trang truoc / lui lai) ---
+    ("previous_action", ["quay lai", "trang truoc", "lui lai"], False),
+
+    # --- newline (xuong dong / dong moi) ---
+    ("newline",         ["xuong dong", "dong moi"], False),
+
+    # --- new_paragraph (xuong doan / doan moi) ---
+    ("new_paragraph",   ["xuong doan", "doan moi"], False),
 
     # --- system_on ---
     ("system_on",       ["bat he thong", "bat dieu khien", "mo he thong"], False),
