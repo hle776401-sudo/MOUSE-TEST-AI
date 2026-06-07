@@ -23,6 +23,7 @@ Demo UI:
   - Nhấn 's': Toggle điều khiển ON/OFF nhanh
 """
 
+import os
 import cv2
 import time
 import traceback
@@ -741,6 +742,16 @@ def main():
             voice_manager.reset()
             voice_state = VoiceState.LISTENING
             voice_result_text = ""
+            _write_voice_status("LISTENING")
+            # Beep ngắn báo mic đã mở
+            if getattr(cfg, 'VOICE_BEEP_ENABLED', False):
+                try:
+                    import winsound
+                    threading.Thread(target=winsound.Beep, daemon=True,
+                                     args=(cfg.VOICE_BEEP_FREQUENCY,
+                                           cfg.VOICE_BEEP_DURATION_MS)).start()
+                except Exception:
+                    pass
             print(f"[VOICE] Triggered via {cfg.VOICE_HOTKEY} — listening...")
 
             def _voice_worker():
@@ -765,9 +776,11 @@ def main():
                                 if ok:
                                     print(f"[VOICE_CMD] Executed: {intent['intent']} (ctx={_cmd_ctx})")
                                     voice_result_text = f"CMD: {intent['intent']} ({_cmd_ctx})"
+                                    _write_voice_status("DONE", text=raw_text, action=intent['intent'])
                                 else:
                                     print(f"[VOICE_CMD] Failed/skipped: {intent['intent']}")
                                     voice_result_text = f"CMD: {intent['intent']} (blocked)"
+                                    _write_voice_status("BLOCKED", text=raw_text, action=intent['intent'])
                                 _handled_as_command = True
 
                                 # Reset spacing state khi newline/new_paragraph
@@ -821,6 +834,7 @@ def main():
                                 controller.press_enter()
                                 print("[VOICE] Auto Enter")
                             voice_result_text = f"TEXT: {raw_text[:25]}"
+                            _write_voice_status("DONE", text=raw_text, action="type_text")
                             try:
                                 _log_main_event(
                                     gesture="Voice Text",
@@ -835,8 +849,8 @@ def main():
                 else:
                     voice_result_text = result.get("error", "")
                     voice_state = VoiceState.ERROR
+                    _write_voice_status("ERROR", text=result.get("error", ""))
                     print(f"[VOICE] Error: {result['error']}")
-
             voice_thread = threading.Thread(target=_voice_worker, daemon=True)
             voice_thread.start()
 
@@ -937,6 +951,26 @@ def main():
                 fps=fps,
                 note=note,
             )
+        except Exception:
+            pass
+
+    # --- Voice status file (cho GUI poll) ---
+    _VOICE_STATUS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "runtime", "voice_status.json")
+    os.makedirs(os.path.dirname(_VOICE_STATUS_FILE), exist_ok=True)
+
+    def _write_voice_status(state, text="", action=""):
+        """Ghi voice state vao file JSON de GUI poll hien thi."""
+        try:
+            import json as _json
+            data = {
+                "state": state,
+                "text": text[:80] if text else "",
+                "action": action,
+                "timestamp": time.time(),
+            }
+            with open(_VOICE_STATUS_FILE, "w", encoding="utf-8") as f:
+                _json.dump(data, f, ensure_ascii=False)
         except Exception:
             pass
 

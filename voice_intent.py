@@ -11,6 +11,14 @@ Thiet ke:
 - Neu khong match bat ky command nao -> fallback ve "text" mode.
 - Neu command can query (open_music, web_search) ma query rong -> fallback ve "text".
 
+Pipeline:
+  1. Normalize text (lower, strip dau, bo punctuation)
+  2. Exact / prefix match (original rules)
+  3. Fuzzy alias match (STT misrecognition corrections)
+  4. Keyword fallback (partial captures)
+  5. Single-word match (khi STT chi nghe duoc 1 tu)
+  6. Fallback to type_text
+
 Output dict:
   - type:            "text" | "command"
   - intent:          "type_text" | <intent_name>
@@ -18,8 +26,6 @@ Output dict:
   - query:           query string co dau neu co (chi o type=command)
   - raw_text:        original text (luon co)
   - normalized_text: da chuan hoa (luon co)
-
-Tro choi vai:  Module phu tro khong thay the text typing mode hien tai.
 """
 
 import re
@@ -37,8 +43,9 @@ def normalize_text(text: str) -> str:
       1. Strip khoang trang hai dau.
       2. Lowercase.
       3. Chuyen 'đ' -> 'd' (NFD khong xu ly duoc ky tu nay).
-      4. Gom nhieu khoang trang thanh 1.
-      5. Bo dau tieng Viet con lai (NFD -> strip combining marks).
+      4. Bo dau cau thuong gap (.,;:!?-).
+      5. Gom nhieu khoang trang thanh 1.
+      6. Bo dau tieng Viet con lai (NFD -> strip combining marks).
 
     Args:
         text: Chuoi input bat ky.
@@ -52,8 +59,10 @@ def normalize_text(text: str) -> str:
     # 'đ' khong duoc NFD decompose thanh 'd' + combining mark
     # -> phai xu ly thu cong truoc khi NFD
     text = text.replace("đ", "d")
+    # Bo dau cau thuong gap (STT doi khi tra ve dau cham, phay...)
+    text = re.sub(r"[.,;:!?\-–—\(\)\[\]{}\"\']", " ", text)
     # Gop khoang trang
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     # Bo dau unicode (NFD decompose -> loai Mn category)
     nfd = unicodedata.normalize("NFD", text)
     ascii_text = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
@@ -61,7 +70,7 @@ def normalize_text(text: str) -> str:
 
 
 # ==============================================================================
-# INTENT RULES
+# INTENT RULES (Stage 1: Exact / prefix match)
 # ==============================================================================
 # Moi rule la 1 tuple:
 #   (intent_name, [prefix_patterns], needs_query)
@@ -88,17 +97,18 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
     ("open_coccoc",     ["mo coc coc"], False),
 
     # --- open_music (needs_query=True) ---
-    # 'mo bai' bi bo vi de nhan nhau: 'mo bai tap', 'mo bai bao cao'...
     ("open_music",      ["mo nhac", "mo bai hat"], True),
 
     # --- web_search (needs_query=True) ---
     ("web_search",      ["tim kiem", "tra cuu", "search", "google"], True),
 
     # --- next_action (chuyen tiep / tiep theo / trang tiep) ---
-    ("next_action",     ["chuyen tiep", "tiep theo", "trang tiep"], False),
+    ("next_action",     ["chuyen tiep", "tiep theo", "trang tiep", "trang sau",
+                         "sang trang", "di tiep"], False),
 
     # --- previous_action (quay lai / trang truoc / lui lai) ---
-    ("previous_action", ["quay lai", "trang truoc", "lui lai"], False),
+    ("previous_action", ["quay lai", "trang truoc", "lui lai", "lui trang",
+                         "quay trang"], False),
 
     # --- newline (xuong dong / dong moi) ---
     ("newline",         ["xuong dong", "dong moi"], False),
@@ -107,12 +117,86 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
     ("new_paragraph",   ["xuong doan", "doan moi"], False),
 
     # --- system_on ---
-    ("system_on",       ["bat he thong", "bat dieu khien", "mo he thong"], False),
+    ("system_on",       ["bat he thong", "bat dieu khien", "mo he thong",
+                         "khoi dong he thong"], False),
 
     # --- system_off ---
-    # Giu dang da normalize (khong dau); 'tắt he thong' bi bo vi chua normalize dung.
-    ("system_off",      ["tat he thong", "tat dieu khien"], False),
+    ("system_off",      ["tat he thong", "tat dieu khien", "dung he thong",
+                         "tat may", "ngung he thong", "he thong tat",
+                         "dung dieu khien"], False),
 ]
+
+
+# ==============================================================================
+# FUZZY ALIASES — STT misrecognition corrections (Stage 2)
+# ==============================================================================
+# Map normalized text that STT commonly returns wrongly -> correct intent.
+# Only for KNOWN misrecognition patterns.
+
+_FUZZY_ALIASES: dict[str, str] = {
+    # --- "trang trước" often misrecognized as ---
+    "khoang truoc":     "previous_action",
+    "khoan truoc":      "previous_action",
+    "trong truoc":      "previous_action",
+    "trang chuc":       "previous_action",
+    "tran truoc":       "previous_action",
+    # --- "trang sau" / "chuyển tiếp" misrecognized as ---
+    "trang xau":        "next_action",
+    "chang tiep":       "next_action",
+    "trang diep":       "next_action",
+    "truyen tiep":      "next_action",
+    "chuyen diep":      "next_action",
+    # --- "tắt hệ thống" partial / misrecognized ---
+    "he thong":         "system_off",    # STT missed "tat", most likely intent
+    "tat he trong":     "system_off",
+    "tat he":           "system_off",
+    "cat he thong":     "system_off",
+    "tap he thong":     "system_off",
+    # --- "bật hệ thống" partial / misrecognized ---
+    "bat he trong":     "system_on",
+    "bat he":           "system_on",
+    "mat he thong":     "system_on",
+    # --- "mở văn bản" misrecognized ---
+    "ma van ban":       "open_word",
+    # --- "xuống đoạn" partial ---
+    "xuong don":        "new_paragraph",
+    "suong doan":       "new_paragraph",
+    # --- "quay lại" misrecognized ---
+    "quay lai":         "previous_action",
+    "way lai":          "previous_action",
+}
+
+
+# ==============================================================================
+# KEYWORD FALLBACK — Partial captures (Stage 3)
+# ==============================================================================
+# When exact/prefix/fuzzy match fails, check if normalized text CONTAINS keywords.
+# Longer phrases first to avoid false positives.
+
+_KEYWORD_FALLBACK: list[tuple[str, list[str]]] = [
+    ("system_off",      ["tat he thong", "he thong tat", "dung he thong",
+                         "ngung he thong"]),
+    ("system_on",       ["bat he thong", "he thong bat", "mo he thong"]),
+    ("new_paragraph",   ["xuong doan"]),
+    ("newline",         ["xuong dong"]),
+    ("next_action",     ["tiep theo", "chuyen tiep", "trang tiep"]),
+    ("previous_action", ["quay lai", "trang truoc"]),
+]
+
+
+# ==============================================================================
+# SINGLE-WORD INTENTS — When STT captures only 1 word (Stage 4)
+# ==============================================================================
+# Very conservative: only unambiguous single words.
+
+_SINGLE_WORD_MAP: dict[str, str] = {
+    "tat":      "system_off",
+    "bat":      "system_on",
+    "dung":     "system_off",
+    "tiep":     "next_action",
+    "truoc":    "previous_action",
+    "lai":      "previous_action",
+}
 
 
 # ==============================================================================
@@ -122,7 +206,13 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
 class VoiceIntentParser:
     """Rule-based parser: text -> intent dict.
 
-    Khong co trang thai (stateless). Co the goi parse() nhieu lan.
+    Pipeline:
+      1. Normalize text
+      2. Exact/prefix match (original rules)
+      3. Fuzzy alias match (STT misrecognition)
+      4. Keyword fallback (partial captures)
+      5. Single-word match
+      6. Fallback to type_text
     """
 
     def parse(self, text: str) -> dict:
@@ -146,30 +236,53 @@ class VoiceIntentParser:
         if not norm:
             return self._text_result(raw, norm)
 
-        # Chay qua tung rule theo thu tu
+        # --- Stage 1: Exact / prefix match ---
         for intent_name, prefixes, needs_query in _INTENT_RULES:
             for prefix in prefixes:
                 if norm == prefix:
-                    # Khop chinh xac
                     if needs_query:
-                        # Khong co query -> fallback text
+                        print(f"[VOICE_PARSE] EXACT match '{norm}'=='{prefix}' "
+                              f"but needs_query -> fallback text")
                         return self._text_result(raw, norm)
+                    print(f"[VOICE_PARSE] EXACT match: '{norm}' -> {intent_name}")
                     return self._command_result(intent_name, "", raw, norm)
 
                 if norm.startswith(prefix + " "):
                     if needs_query:
-                        # Prefix match + needs_query: lay query, tra command.
                         norm_query = norm[len(prefix):].strip()
                         if not norm_query:
                             return self._text_result(raw, norm)
                         raw_query = self._extract_raw_query(raw, prefix)
+                        print(f"[VOICE_PARSE] PREFIX match: '{norm}' -> "
+                              f"{intent_name} query='{raw_query}'")
                         return self._command_result(intent_name, raw_query, raw, norm)
                     else:
-                        # Prefix match + NO query: tu choi, fallback text.
-                        # Tranh nhan nhau: "mo word bai bao cao" != open_word.
+                        # Extra text after exact command -> text (tranh nhan nhau)
                         return self._text_result(raw, norm)
 
-        # Khong match bat ky command nao -> text mode
+        # --- Stage 2: Fuzzy alias match ---
+        if norm in _FUZZY_ALIASES:
+            intent_name = _FUZZY_ALIASES[norm]
+            print(f"[VOICE_PARSE] FUZZY match: '{norm}' -> {intent_name}")
+            return self._command_result(intent_name, "", raw, norm)
+
+        # --- Stage 3: Keyword fallback (contains) ---
+        for intent_name, keywords in _KEYWORD_FALLBACK:
+            for kw in keywords:
+                if kw in norm:
+                    print(f"[VOICE_PARSE] KEYWORD match: '{norm}' "
+                          f"contains '{kw}' -> {intent_name}")
+                    return self._command_result(intent_name, "", raw, norm)
+
+        # --- Stage 4: Single-word match ---
+        words = norm.split()
+        if len(words) == 1 and words[0] in _SINGLE_WORD_MAP:
+            intent_name = _SINGLE_WORD_MAP[words[0]]
+            print(f"[VOICE_PARSE] SINGLE-WORD match: '{norm}' -> {intent_name}")
+            return self._command_result(intent_name, "", raw, norm)
+
+        # --- Stage 5: No match -> text ---
+        print(f"[VOICE_PARSE] NO match: '{norm}' -> type_text (fallback)")
         return self._text_result(raw, norm)
 
     # ------------------------------------------------------------------
@@ -246,6 +359,7 @@ if __name__ == "__main__":
         _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     TEST_CASES = [
+        # --- Original tests ---
         "mo youtube",
         "Mo YouTube",
         "mo nhac Son Tung MTP",
@@ -261,27 +375,32 @@ if __name__ == "__main__":
         "tat he thong",
         "xin chao thay co em xin trinh bay do an",
         "xin chào thầy cô em xin trình bày đồ án",
-        # Edge: needs_query nhung khong co query -> fallback text
         "mo nhac",
         "tim kiem",
-        # Edge: rong
         "",
-        # --- Regression: exact-only commands khong duoc prefix match ---
-        "mo word bai bao cao cua toi",      # -> text (khong phai open_word)
-        "mo youtube la mot vi du",           # -> text (khong phai open_youtube)
-        "bat he thong nay",                 # -> text (khong phai system_on)
-        # --- open_music van prefix match khi co query ---
-        "mo bai hat Chung ta cua tuong lai",  # -> open_music OK
-        "mo nhac Son Tung MTP",               # -> open_music OK
-        # --- 'mo bai tap' khong con nhan nhau do da bo 'mo bai' ---
-        "mo bai tap",                          # -> text
-        # --- Fix: 'đ' -> 'd' trong normalize, test tieng Viet co dau ---
-        "bật điều khiển",    # -> system_on
-        "tắt điều khiển",    # -> system_off
-        "bật hệ thống",      # -> system_on
-        "tắt hệ thống",      # -> system_off
-        "điều khiển",        # -> type_text (cau don, khong match command)
-        "mở điều khiển",     # -> type_text (prefix 'mo dieu khien' khong co trong rules)
+        "mo word bai bao cao cua toi",
+        "mo youtube la mot vi du",
+        "bat he thong nay",
+        "mo bai hat Chung ta cua tuong lai",
+        "mo nhac Son Tung MTP",
+        "mo bai tap",
+        "bật điều khiển",
+        "tắt điều khiển",
+        "bật hệ thống",
+        "tắt hệ thống",
+        "điều khiển",
+        "mở điều khiển",
+        # --- New: Fuzzy / partial / single-word tests ---
+        "hệ thống",             # -> system_off (fuzzy alias)
+        "khoang trước",         # -> previous_action (fuzzy alias)
+        "xuống",                # -> type_text (khong du ro, 'xuong' khong trong single_word)
+        "xuống đoạn",           # -> new_paragraph (exact match)
+        "tắt",                  # -> system_off (single word)
+        "bật",                  # -> system_on (single word)
+        "tiếp",                 # -> next_action (single word)
+        "trước",                # -> previous_action (single word)
+        "trang sau",            # -> next_action (exact match)
+        "xin chào mọi người",  # -> type_text (no match)
     ]
 
     parser = VoiceIntentParser()

@@ -424,9 +424,15 @@ class GestureRecognizer:
         self._is_pinching_prev = is_pinching
 
         # Effective cooldown/threshold for DEMO_MODE
-        eff_click_cd = _get_effective_cooldown(cfg.CLICK_COOLDOWN)
+        _is_demo = getattr(cfg, 'DEMO_MODE', False)
+        eff_click_cd = (getattr(cfg, 'DEMO_CLICK_COOLDOWN', cfg.CLICK_COOLDOWN)
+                        if _is_demo else _get_effective_cooldown(cfg.CLICK_COOLDOWN))
         eff_hold = (getattr(cfg, 'DEMO_PINCH_HOLD_THRESHOLD', cfg.PINCH_HOLD_THRESHOLD)
-                    if getattr(cfg, 'DEMO_MODE', False) else cfg.PINCH_HOLD_THRESHOLD)
+                    if _is_demo else cfg.PINCH_HOLD_THRESHOLD)
+        eff_freeze = ((getattr(cfg, 'DEMO_CLICK_FREEZE_MS', 150) / 1000.0)
+                      if _is_demo else cfg.CLICK_FREEZE_TIME)
+        eff_max_hold = (getattr(cfg, 'DEMO_CLICK_MAX_PINCH_HOLD', 0.6)
+                        if _is_demo else None)
         stable_needed = getattr(cfg, 'PINCH_STABLE_FRAMES', 2)
 
         # --- State: IDLE ---
@@ -448,10 +454,16 @@ class GestureRecognizer:
                 self.pinch_state = PinchState.IDLE
                 self._pinch_stable_count = 0
 
+                hold_dur = now - self._pinch_start_time
+
+                # DEMO_MODE: cancel click if held too long (prevent late-release click)
+                if eff_max_hold is not None and hold_dur > eff_max_hold:
+                    return None
+
                 if cooldown_passed(self._left_click_time, eff_click_cd, now):
                     self._left_click_time = now
                     self._post_action_time = now
-                    self._click_freeze_until = now + cfg.CLICK_FREEZE_TIME
+                    self._click_freeze_until = now + eff_freeze
 
                     # Double Click — respects DEMO_MODE guard
                     if (_is_gesture_enabled('double_click') and

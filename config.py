@@ -249,12 +249,19 @@ VOICE_AUTO_ENTER = False            # True = tu nhan Enter sau khi go xong text
 VOICE_LANGUAGE = "vi-VN"            # Ngôn ngữ nhận diện giọng nói (vi-VN / en-US / ja-JP ...)
 VOICE_LISTEN_TIMEOUT = 7            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
                                     # Nếu im lặng quá lâu → VOICE_ERROR
-VOICE_PHRASE_TIME_LIMIT = 30        # Thời gian tối đa cho 1 câu nói (giây)
+VOICE_PHRASE_TIME_LIMIT = 10        # Thời gian tối đa cho 1 câu nói (giây)
                                     # Sau thời gian này tự cắt và gửi STT
+VOICE_PAUSE_THRESHOLD = 1.0         # Im lặng bao lâu thì coi là hết câu (giây)
+                                    # Mặc định SpeechRecognition = 0.8, quá ngắn cho tiếng Việt
+VOICE_NOISE_ADJUST_DURATION = 0.3   # Thời gian đo nhiễu nền trước khi nghe (giây)
+                                    # Giam tu 0.7 xuong 0.3 de nguoi dung khong mat chu dau
 VOICE_TYPING_SPEED = 0.02          # Delay trước khi paste (giây)
 VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
 COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)
 VOICE_TEXT_APPEND_SPACE = True      # True = them 1 dau cach sau text khi nhap bang giong noi
+VOICE_BEEP_ENABLED = True           # Phat am bao ngan khi mic bat dau nghe
+VOICE_BEEP_FREQUENCY = 1200         # Tan so beep (Hz)
+VOICE_BEEP_DURATION_MS = 200        # Do dai beep (ms)
 
 
 # ==============================================================================
@@ -383,7 +390,7 @@ VOICE_TRIGGER_COOLDOWN       = 3.0          # Giay khong trigger lai sau khi fir
 # Khi DEMO_MODE = True:  dung nhom DEMO_ENABLE_* thay the, tang cooldown, tang stable frames.
 # DEMO_MODE khong lam mat chuc nang o che do thuong.
 
-DEMO_MODE = False                   # False = che do thuong, True = che do demo an toan
+DEMO_MODE = True                    # False = che do thuong, True = che do demo an toan
 
 # --- Che do thuong (DEMO_MODE = False) ---
 ENABLE_DOUBLE_CLICK    = True       # Bat/tat Double Click
@@ -409,6 +416,11 @@ DEMO_ENABLE_SYSTEM_TOGGLE   = True   # Demo: giu system toggle
 DEMO_COOLDOWN_MULTIPLIER      = 1.5  # Tang cooldown x1.5 khi demo
 DEMO_POST_ACTION_MULTIPLIER   = 2.0  # Tang post-action cooldown x2 khi demo
 DEMO_PINCH_HOLD_THRESHOLD     = 1.20 # Pinch hold lau hon khi demo (1.2s, ko bao gio drag)
+
+# --- Demo click tuning ---
+DEMO_CLICK_COOLDOWN           = 0.35 # Cooldown giua cac lan click khi demo (giay)
+DEMO_CLICK_FREEZE_MS          = 150  # Freeze cursor sau click khi demo (ms)
+DEMO_CLICK_MAX_PINCH_HOLD     = 0.6  # Giu pinch > 0.6s khi demo = huy, khong click khi tha
 
 # --- Voice Demo Safe Mode ---
 # Khi True: chi cho phep cac voice command trong safe whitelist

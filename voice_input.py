@@ -59,6 +59,11 @@ class VoiceInputManager:
         self.recognizer.dynamic_energy_threshold = True
         self.recognizer.energy_threshold = 300   # Ngưỡng mặc định, sẽ tự điều chỉnh
 
+        # Pause threshold: thời gian im lặng trước khi coi là hết câu
+        # Mặc định 0.8s quá ngắn cho tiếng Việt → tăng lên 1.0s
+        self.recognizer.pause_threshold = getattr(cfg, 'VOICE_PAUSE_THRESHOLD', 1.0)
+        self.recognizer.phrase_threshold = 0.3    # Min duration để coi là phrase
+
         self.state = VoiceState.IDLE
         self.last_result = self._make_result(VoiceState.IDLE)
 
@@ -92,13 +97,20 @@ class VoiceInputManager:
         self.state = VoiceState.LISTENING
         try:
             with mic as source:
-                # Điều chỉnh noise ngắn trước khi nghe
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                # Điều chỉnh noise trước khi nghe
+                _noise_dur = getattr(cfg, 'VOICE_NOISE_ADJUST_DURATION', 0.3)
+                self.recognizer.adjust_for_ambient_noise(source, duration=_noise_dur)
+
+                _ptl = getattr(cfg, 'VOICE_PHRASE_TIME_LIMIT', 10)
+                _lt = getattr(cfg, 'VOICE_LISTEN_TIMEOUT', 7)
+                print(f"[VOICE] Params: timeout={_lt}s, phrase_limit={_ptl}s, "
+                      f"pause={self.recognizer.pause_threshold}s, "
+                      f"noise_adj={_noise_dur}s, energy={self.recognizer.energy_threshold:.0f}")
 
                 audio = self.recognizer.listen(
                     source,
-                    timeout=cfg.VOICE_LISTEN_TIMEOUT,        # Chờ bắt đầu nói
-                    phrase_time_limit=cfg.VOICE_PHRASE_TIME_LIMIT  # Giới hạn độ dài câu
+                    timeout=_lt,
+                    phrase_time_limit=_ptl,
                 )
 
         except sr.WaitTimeoutError:

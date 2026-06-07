@@ -9,7 +9,7 @@ Chay:     python app_gui.py
 Phase:    GUI-2 v3 (Mockup Polish)
 """
 
-import csv, os, subprocess, sys, threading
+import csv, json, os, subprocess, sys, threading, time
 from collections import Counter
 from pathlib import Path
 from statistics import mean
@@ -150,9 +150,14 @@ class GestureControllerApp(ctk.CTk):
         self._proc = None
         self._analyze_thread = None
         self._stat_labels = {}
+        # Voice status polling
+        self._voice_status_file = str(_BASE_DIR / "runtime" / "voice_status.json")
+        self._voice_last_ts = 0
+        self._voice_hide_after = 0
         self._setup_window()
         self._build_ui()
         self._poll_proc()
+        self._poll_voice_status()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── Window ──────────────────────────────────────────────────────────────
@@ -175,11 +180,13 @@ class GestureControllerApp(ctk.CTk):
     def _build_ui(self):
         self.grid_rowconfigure(0, weight=0)  # header
         self.grid_rowconfigure(1, weight=0)  # status panel
-        self.grid_rowconfigure(2, weight=1)  # tabs (expand)
-        self.grid_rowconfigure(3, weight=0)  # footer
+        self.grid_rowconfigure(2, weight=0)  # voice banner (hidden by default)
+        self.grid_rowconfigure(3, weight=1)  # tabs (expand)
+        self.grid_rowconfigure(4, weight=0)  # footer
         self.grid_columnconfigure(0, weight=1)
         self._build_header()
         self._build_status_panel()
+        self._build_voice_banner()
         self._build_tabs()
         self._build_footer()
 
@@ -246,6 +253,84 @@ class GestureControllerApp(ctk.CTk):
             command=self.stop_controller)
         self._btn_stop.pack(side="left")
 
+    # ── Voice Banner (hidden by default) ────────────────────────────────────────
+    def _build_voice_banner(self):
+        self._vb_wrap = ctk.CTkFrame(self, fg_color=C_BG, height=0)
+        self._vb_wrap.grid(row=2, column=0, sticky="ew", padx=20, pady=(0,0))
+
+        self._vb_frame = ctk.CTkFrame(self._vb_wrap,
+            fg_color=("#f0f9ff", "#0c2d48"), corner_radius=12,
+            border_width=1, border_color=("#38bdf8", "#1e6091"), height=42)
+        self._vb_frame.pack(fill="x", pady=(4,0))
+        self._vb_frame.pack_propagate(False)
+
+        self._vb_lbl = ctk.CTkLabel(self._vb_frame,
+            text="", font=_F(13, True),
+            text_color=("#0369a1", "#7dd3fc"), anchor="w")
+        self._vb_lbl.pack(side="left", padx=16, pady=6)
+
+        # Initially hidden
+        self._vb_wrap.grid_remove()
+
+    def _show_voice_banner(self, text, color=None):
+        """Show voice banner with text."""
+        self._vb_lbl.configure(text=text)
+        if color:
+            self._vb_lbl.configure(text_color=color)
+            self._vb_frame.configure(border_color=color)
+        self._vb_wrap.grid()
+
+    def _hide_voice_banner(self):
+        self._vb_wrap.grid_remove()
+
+    def _poll_voice_status(self):
+        """Poll runtime/voice_status.json moi 300ms."""
+        try:
+            if os.path.exists(self._voice_status_file):
+                with open(self._voice_status_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                ts = data.get("timestamp", 0)
+                if ts > self._voice_last_ts:
+                    self._voice_last_ts = ts
+                    state = data.get("state", "")
+                    text = data.get("text", "")
+                    action = data.get("action", "")
+
+                    if state == "LISTENING":
+                        self._show_voice_banner(
+                            "🎤  Đang nghe lệnh...",
+                            color=("#0369a1", "#7dd3fc"))
+                        self._voice_hide_after = 0
+                    elif state == "DONE":
+                        if action and action != "type_text":
+                            msg = f"✅  Đã nhận: \"{text}\" → {action}"
+                        elif action == "type_text":
+                            msg = f"✅  Đã nhập: \"{text[:40]}\""
+                        else:
+                            msg = f"✅  Đã nhận: \"{text[:40]}\""
+                        self._show_voice_banner(msg,
+                            color=("#16a34a", "#4ade80"))
+                        self._voice_hide_after = time.time() + 4
+                    elif state == "BLOCKED":
+                        msg = f"⚠️  Lệnh bị chặn: \"{text}\" ({action})"
+                        self._show_voice_banner(msg,
+                            color=("#d97706", "#fbbf24"))
+                        self._voice_hide_after = time.time() + 4
+                    elif state == "ERROR":
+                        self._show_voice_banner(
+                            f"❌  {text or 'Không nhận rõ lệnh, vui lòng thử lại'}",
+                            color=("#ef4444", "#f87171"))
+                        self._voice_hide_after = time.time() + 5
+
+            # Auto-hide after timeout
+            if self._voice_hide_after > 0 and time.time() > self._voice_hide_after:
+                self._hide_voice_banner()
+                self._voice_hide_after = 0
+
+        except Exception:
+            pass
+        self.after(300, self._poll_voice_status)
+
     # ── Tabs ────────────────────────────────────────────────────────────────
     def _build_tabs(self):
         self._tabs = ctk.CTkTabview(self, fg_color=C_BG,
@@ -262,7 +347,7 @@ class GestureControllerApp(ctk.CTk):
                 font=_F(12, True))
         except Exception:
             pass
-        self._tabs.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0,0))
+        self._tabs.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0,0))
 
         t1 = self._tabs.add(TAB_CTRL)
         t2 = self._tabs.add(TAB_GUIDE)
@@ -538,7 +623,7 @@ class GestureControllerApp(ctk.CTk):
     # ── Footer ──────────────────────────────────────────────────────────────
     def _build_footer(self):
         ft = ctk.CTkFrame(self, fg_color=C_PANEL, corner_radius=0, height=34)
-        ft.grid(row=3, column=0, sticky="ew"); ft.grid_propagate(False)
+        ft.grid(row=4, column=0, sticky="ew"); ft.grid_propagate(False)
         ft.grid_columnconfigure(0, weight=1)
         self._flbl = ctk.CTkLabel(ft, text="ⓘ  Hệ thống hoạt động ổn định",
             font=_F(10), text_color=C_TEXT2, anchor="w")
