@@ -68,6 +68,22 @@ except Exception as _vcmd_import_err:
     print(f"[WARN] Voice Command modules import failed: {_vcmd_import_err}")
     _VOICE_CMD_MODULES_OK = False
 
+# --- Controller Lock (huong phat trien): safe import ---
+# Chi import khi MULTI_PERSON_CONTROLLER_LOCK_ENABLED = True.
+# Khi False (mac dinh): khong import, khong anh huong pipeline/FPS.
+_CONTROLLER_LOCK_MODULES_OK = False
+if getattr(cfg, "MULTI_PERSON_CONTROLLER_LOCK_ENABLED", False):
+    try:
+        from pose_tracker import PoseTracker
+        from controller_lock_manager import ControllerLockManager
+        from hand_person_association import HandPersonAssociation
+        _CONTROLLER_LOCK_MODULES_OK = True
+        print("[INIT] Controller Lock modules imported (flag=True)")
+    except Exception as _cl_import_err:
+        print(f"[WARN] Controller Lock import failed: {_cl_import_err}")
+        print("[WARN] Controller Lock disabled — system runs normally")
+        _CONTROLLER_LOCK_MODULES_OK = False
+
 if cfg.ENABLE_VOICE_INPUT:
     import keyboard
     from voice_input import VoiceInputManager, VoiceState
@@ -733,8 +749,12 @@ def main():
         voice_result_text = ""          # Text nhan duoc gan nhat
         _last_voice_was_text = False    # True neu lan voice truoc la text (de them space)
 
-        def _on_voice_hotkey():
-            """Callback khi nguoi dung nhan global hotkey."""
+        def _on_voice_start(mode="command"):
+            """Khoi tao voice thread voi mode cu the.
+
+            Args:
+                mode: 'command' (lenh ngan) hoac 'text' (nhap van ban)
+            """
             nonlocal voice_thread, voice_state, voice_result_text
             if voice_thread is not None and voice_thread.is_alive():
                 print("[VOICE] Already listening, please wait...")
@@ -742,7 +762,7 @@ def main():
             voice_manager.reset()
             voice_state = VoiceState.LISTENING
             voice_result_text = ""
-            _write_voice_status("LISTENING")
+            _write_voice_status("LISTENING", mode=mode)
             # Beep ngắn báo mic đã mở
             if getattr(cfg, 'VOICE_BEEP_ENABLED', False):
                 try:
@@ -752,11 +772,12 @@ def main():
                                            cfg.VOICE_BEEP_DURATION_MS)).start()
                 except Exception:
                     pass
-            print(f"[VOICE] Triggered via {cfg.VOICE_HOTKEY} — listening...")
+            _mode_label = "lenh" if mode == "command" else "van ban"
+            print(f"[VOICE] Mode: {mode} ({_mode_label}) — listening...")
 
             def _voice_worker():
                 nonlocal voice_state, voice_result_text, _last_voice_was_text
-                result = voice_manager.listen_and_recognize()
+                result = voice_manager.listen_and_recognize(mode=mode)
                 if result["state"] == VoiceState.DONE:
                     raw_text = result["text"]
                     voice_result_text = raw_text
@@ -776,11 +797,11 @@ def main():
                                 if ok:
                                     print(f"[VOICE_CMD] Executed: {intent['intent']} (ctx={_cmd_ctx})")
                                     voice_result_text = f"CMD: {intent['intent']} ({_cmd_ctx})"
-                                    _write_voice_status("DONE", text=raw_text, action=intent['intent'])
+                                    _write_voice_status("DONE", text=raw_text, action=intent['intent'], mode=mode)
                                 else:
                                     print(f"[VOICE_CMD] Failed/skipped: {intent['intent']}")
                                     voice_result_text = f"CMD: {intent['intent']} (blocked)"
-                                    _write_voice_status("BLOCKED", text=raw_text, action=intent['intent'])
+                                    _write_voice_status("BLOCKED", text=raw_text, action=intent['intent'], mode=mode)
                                 _handled_as_command = True
 
                                 # Reset spacing state khi newline/new_paragraph
@@ -793,7 +814,7 @@ def main():
                                         gesture="Voice Command",
                                         action=intent['intent'],
                                         executed=ok,
-                                        note=f"voice_command|text={raw_text[:30]}|ctx={_cmd_ctx}",
+                                        note=f"voice_command|mode={mode}|text={raw_text[:30]}|ctx={_cmd_ctx}",
                                     )
                                 except Exception:
                                     pass
@@ -815,7 +836,7 @@ def main():
                                     gesture="Voice Text",
                                     action="blocked",
                                     executed=False,
-                                    note=f"blocked_demo|text={raw_text[:30]}",
+                                    note=f"blocked_demo|mode={mode}|text={raw_text[:30]}",
                                 )
                             except Exception:
                                 pass
@@ -834,13 +855,13 @@ def main():
                                 controller.press_enter()
                                 print("[VOICE] Auto Enter")
                             voice_result_text = f"TEXT: {raw_text[:25]}"
-                            _write_voice_status("DONE", text=raw_text, action="type_text")
+                            _write_voice_status("DONE", text=raw_text, action="type_text", mode=mode)
                             try:
                                 _log_main_event(
                                     gesture="Voice Text",
                                     action="type_text",
                                     executed=True,
-                                    note=f"voice_text|text={raw_text[:30]}",
+                                    note=f"voice_text|mode={mode}|text={raw_text[:30]}",
                                 )
                             except Exception:
                                 pass
@@ -849,17 +870,28 @@ def main():
                 else:
                     voice_result_text = result.get("error", "")
                     voice_state = VoiceState.ERROR
-                    _write_voice_status("ERROR", text=result.get("error", ""))
+                    _write_voice_status("ERROR", text=result.get("error", ""), mode=mode)
                     print(f"[VOICE] Error: {result['error']}")
             voice_thread = threading.Thread(target=_voice_worker, daemon=True)
             voice_thread.start()
 
+        # Wrapper cho backward compat (Ctrl+Alt+V = command mode)
+        def _on_voice_hotkey():
+            _on_voice_start(mode="command")
+
+        # Wrapper cho text mode (Ctrl+Alt+T)
+        def _on_voice_text_hotkey():
+            _on_voice_start(mode="text")
+
         keyboard.add_hotkey(cfg.VOICE_HOTKEY, _on_voice_hotkey)
-        print(f"  Voice Input: ON (hotkey: {cfg.VOICE_HOTKEY.upper()})")
+        print(f"  Voice Input: ON (command hotkey: {cfg.VOICE_HOTKEY.upper()})")
+        _text_hk = getattr(cfg, 'VOICE_TEXT_HOTKEY', 'ctrl+alt+t')
+        keyboard.add_hotkey(_text_hk, _on_voice_text_hotkey)
+        print(f"  Voice Text:  ON (text hotkey: {_text_hk.upper()})")
 
     # --- Gesture Voice Trigger helper (goi sau tung frame) ---
     def _check_gesture_voice_trigger():
-        """Poll voice_trigger_fired tu secondary_recognizer va goi _on_voice_hotkey.
+        """Poll voice_trigger_fired tu secondary_recognizer va goi _on_voice_start(command).
 
         An toan khi ENABLE_VOICE_INPUT=False hoac voice chua init.
         Goi sau toan bo dispatch moi frame de bat tat ca nhanh.
@@ -872,11 +904,32 @@ def main():
         if not getattr(rec, "voice_trigger_fired", False):
             return
         rec.voice_trigger_fired = False  # reset ngay truoc khi goi
-        print("[GESTURE] Voice Trigger -> start voice input")
+        print("[GESTURE] Voice Trigger -> start voice input (command)")
         try:
-            _on_voice_hotkey()
+            _on_voice_start(mode="command")
         except Exception as _vt_err:
             print(f"[GESTURE] Voice Trigger callback error: {_vt_err}")
+
+    # --- Gesture Text Voice Trigger helper ---
+    def _check_gesture_text_voice_trigger():
+        """Poll text_voice_trigger_fired va goi _on_voice_start(text).
+
+        An toan khi VOICE_TEXT_TRIGGER_ENABLED=False hoac voice chua init.
+        Goi sau _check_gesture_voice_trigger moi frame.
+        """
+        if not getattr(cfg, "VOICE_TEXT_TRIGGER_ENABLED", False):
+            return
+        if not cfg.ENABLE_VOICE_INPUT:
+            return
+        rec = coordinator.secondary_recognizer
+        if not getattr(rec, "text_voice_trigger_fired", False):
+            return
+        rec.text_voice_trigger_fired = False  # reset ngay truoc khi goi
+        print("[GESTURE] Text Voice Trigger -> start voice text input")
+        try:
+            _on_voice_start(mode="text")
+        except Exception as _vt_err:
+            print(f"[GESTURE] Text Voice Trigger callback error: {_vt_err}")
 
     # Track which mode is active
     is_two_hand_mode = False
@@ -959,7 +1012,7 @@ def main():
                                        "runtime", "voice_status.json")
     os.makedirs(os.path.dirname(_VOICE_STATUS_FILE), exist_ok=True)
 
-    def _write_voice_status(state, text="", action=""):
+    def _write_voice_status(state, text="", action="", mode=""):
         """Ghi voice state vao file JSON de GUI poll hien thi."""
         try:
             import json as _json
@@ -967,6 +1020,7 @@ def main():
                 "state": state,
                 "text": text[:80] if text else "",
                 "action": action,
+                "mode": mode,
                 "timestamp": time.time(),
             }
             with open(_VOICE_STATUS_FILE, "w", encoding="utf-8") as f:
@@ -1424,6 +1478,7 @@ def main():
 
             # --- Poll Gesture Voice Trigger (sau toan bo dispatch, moi nhanh) ---
             _check_gesture_voice_trigger()
+            _check_gesture_text_voice_trigger()
 
             # --- MODE DISPLAY (hien thi ro rang mode hien tai) ---
             font = cv2.FONT_HERSHEY_SIMPLEX

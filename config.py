@@ -247,14 +247,21 @@ VOICE_AUTO_ENTER = False            # True = tu nhan Enter sau khi go xong text
 
 # --- Cấu hình STT chung (dùng cho cả 2 mode) ---
 VOICE_LANGUAGE = "vi-VN"            # Ngôn ngữ nhận diện giọng nói (vi-VN / en-US / ja-JP ...)
-VOICE_LISTEN_TIMEOUT = 7            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
-                                    # Nếu im lặng quá lâu → VOICE_ERROR
-VOICE_PHRASE_TIME_LIMIT = 10        # Thời gian tối đa cho 1 câu nói (giây)
-                                    # Sau thời gian này tự cắt và gửi STT
-VOICE_PAUSE_THRESHOLD = 1.0         # Im lặng bao lâu thì coi là hết câu (giây)
-                                    # Mặc định SpeechRecognition = 0.8, quá ngắn cho tiếng Việt
+VOICE_LISTEN_TIMEOUT = 5            # Thời gian chờ tối đa để bắt đầu nghe được giọng (giây)
+                                    # Giam tu 7 xuong 5 — du cho demo, khong cho doi lau
+VOICE_PHRASE_TIME_LIMIT = 3         # Thời gian tối đa cho 1 câu nói (giây)
+                                    # Giam tu 10 xuong 3 — lenh ngan "trang sau" chi can 1-2s
+                                    # NGUYEN NHAN CHINH gay delay 10s truoc do
+VOICE_PAUSE_THRESHOLD = 0.6         # Im lặng bao lâu thì coi là hết câu (giây)
+                                    # Giam tu 1.0 xuong 0.6 — cat nhanh hon sau khi noi xong
 VOICE_NOISE_ADJUST_DURATION = 0.3   # Thời gian đo nhiễu nền trước khi nghe (giây)
-                                    # Giam tu 0.7 xuong 0.3 de nguoi dung khong mat chu dau
+VOICE_ENERGY_THRESHOLD      = 500   # Nguong energy cho mic Realtek
+                                    # Tang tu 300 len 500 — loc bot nhieu nen, chi bat giong noi
+VOICE_MAX_ENERGY_THRESHOLD  = 800   # Gioi han tren sau calibration
+VOICE_DYNAMIC_ENERGY        = False # Dung gia tri co dinh, khong drift
+VOICE_SKIP_AMBIENT_CALIBRATION = True   # Bo qua calibration — dung threshold co dinh 500
+VOICE_MIC_DEVICE_INDEX      = 1    # Microphone Array (Realtek) — DA TEST OK
+                                    # STT nhan duoc "trang sau" thanh cong
 VOICE_TYPING_SPEED = 0.02          # Delay trước khi paste (giây)
 VOICE_STATUS_DISPLAY = True         # Hiển thị trạng thái voice trên UI overlay
 COLOR_VOICE = (255, 200, 0)         # Màu banner voice (cyan-vàng)
@@ -384,20 +391,52 @@ VOICE_TRIGGER_HOLD_SECS      = 1.5          # Giay phai giu pose de trigger (tan
 VOICE_TRIGGER_COOLDOWN       = 3.0          # Giay khong trigger lai sau khi fired
 
 # ==============================================================================
+# Section 13B: Voice Dual Mode — Command / Text
+# ==============================================================================
+# Command mode: lenh ngan, phan hoi nhanh ("trang sau", "mo van ban")
+# Text mode:    nhap van ban dai ("xin chao thay co em xin trinh bay do an")
+#
+# Trigger command: Ctrl+Alt+V hoac Gesture [0,1,1,1,0]
+# Trigger text:    Ctrl+Alt+T hoac Gesture [1,1,0,0,0] (pose chu L)
+
+VOICE_DEFAULT_MODE = "command"              # Mode mac dinh khi khong chi dinh
+
+# --- Command mode STT params ---
+VOICE_CMD_LISTEN_TIMEOUT    = 6             # Timeout bat dau nghe (giay)
+VOICE_CMD_PHRASE_TIME_LIMIT = 4             # Hard cap cho 1 cau noi (giay)
+VOICE_CMD_PAUSE_THRESHOLD   = 0.8           # Im lang bao lau thi cat cau (giay)
+
+# --- Text mode STT params ---
+VOICE_TEXT_LISTEN_TIMEOUT    = 7            # Timeout bat dau nghe (giay)
+VOICE_TEXT_PHRASE_TIME_LIMIT = 10           # Hard cap cho 1 cau noi (giay)
+VOICE_TEXT_PAUSE_THRESHOLD   = 1.0          # Im lang bao lau thi cat cau (giay)
+
+# --- Hotkey cho text mode ---
+VOICE_TEXT_HOTKEY = "ctrl+alt+t"            # Global hotkey cho Text mode
+
+# --- Gesture Text Voice Trigger (pose chu L o Secondary hand) ---
+VOICE_TEXT_TRIGGER_ENABLED       = True
+VOICE_TEXT_TRIGGER_PATTERN       = [1, 1, 0, 0, 0]  # Thumb + Index gio, rest cup
+VOICE_TEXT_TRIGGER_HOLD_SECS     = 2.0               # Giu pose 2s de trigger
+VOICE_TEXT_TRIGGER_STABLE_FRAMES = 6                 # Can 6 frame on dinh
+VOICE_TEXT_TRIGGER_COOLDOWN      = 4.0               # Cooldown sau khi fired
+
+# ==============================================================================
 # Section 14: DEMO MODE — Che do demo an toan truoc hoi dong
 # ==============================================================================
 # Khi DEMO_MODE = False: dung nhom ENABLE_* de bat/tat tung gesture.
 # Khi DEMO_MODE = True:  dung nhom DEMO_ENABLE_* thay the, tang cooldown, tang stable frames.
 # DEMO_MODE khong lam mat chuc nang o che do thuong.
 
-DEMO_MODE = True                    # False = che do thuong, True = che do demo an toan
+DEMO_MODE = False                    # False = che do thuong, True = che do demo an toan
 
 # --- Che do thuong (DEMO_MODE = False) ---
 ENABLE_DOUBLE_CLICK    = True       # Bat/tat Double Click
 ENABLE_DRAG            = True       # Bat/tat Drag and Drop
 ENABLE_RIGHT_CLICK     = True       # Bat/tat Right Click
 ENABLE_ZOOM            = True       # Bat/tat Zoom In/Out
-ENABLE_VOICE_TRIGGER_G = True       # Bat/tat Gesture Voice Trigger (khac ENABLE_GESTURE_VOICE_TRIGGER)
+ENABLE_VOICE_TRIGGER_G      = True  # Bat/tat Gesture Voice Trigger (khac ENABLE_GESTURE_VOICE_TRIGGER)
+ENABLE_VOICE_TEXT_TRIGGER_G = True  # Bat/tat Gesture Text Voice Trigger (pose chu L)
 ENABLE_SWIPE           = True       # Bat/tat Swipe Left/Right
 ENABLE_SCROLL          = True       # Bat/tat Scroll Up/Down
 ENABLE_SYSTEM_TOGGLE   = True       # Bat/tat System Toggle (5 ngon)
@@ -407,7 +446,8 @@ DEMO_ENABLE_DOUBLE_CLICK    = False  # Demo: tat double click de tranh nham
 DEMO_ENABLE_DRAG            = False  # Demo: tat drag de tranh loi
 DEMO_ENABLE_RIGHT_CLICK     = False  # Demo: tat right click de tranh mo menu
 DEMO_ENABLE_ZOOM            = False  # Demo: tat zoom de tranh tu kich hoat
-DEMO_ENABLE_VOICE_TRIGGER_G = True   # Demo: bat voice trigger gesture (de demo cu chi + giong noi)
+DEMO_ENABLE_VOICE_TRIGGER_G      = True   # Demo: bat voice trigger gesture (de demo cu chi + giong noi)
+DEMO_ENABLE_VOICE_TEXT_TRIGGER_G = True   # Demo: bat text voice trigger (pose chu L)
 DEMO_ENABLE_SWIPE           = True   # Demo: giu swipe (on dinh)
 DEMO_ENABLE_SCROLL          = True   # Demo: giu scroll (on dinh)
 DEMO_ENABLE_SYSTEM_TOGGLE   = True   # Demo: giu system toggle
@@ -447,3 +487,50 @@ PINCH_STABLE_FRAMES    = 3          # Frame lien tuc pinch moi vao PREPARING
 RIGHT_CLICK_STABLE_FRAMES = 4       # Frame lien tuc o right-click pose moi bat dau tracking
 RIGHT_CLICK_COOLDOWN      = 1.0     # Cooldown rieng cho right click (giay) — tang tu 0.2
                                     # Tranh ban lien tuc khi giu pose
+
+# ==============================================================================
+# Section 16: CONTROLLER LOCK — Khoa nguoi dieu khien (huong phat trien)
+# ==============================================================================
+# Single-controller lock using MediaPipe Pose + Hand-Wrist Association.
+# Dung de phan biet nguoi dieu khien trong moi truong dong nguoi.
+#
+# Cach hoat dong:
+#   1. MediaPipe Pose phat hien co the nguoi va kiem tra ai dang gio tay.
+#   2. Nguoi gio tay lien tuc >= CONTROLLER_RAISE_HAND_HOLD_SECS -> LOCKED.
+#   3. Chi ban tay co wrist gan controller (Pose) moi duoc xu ly gesture.
+#   4. Tay nguoi khac bi bo qua.
+#
+# Gioi han:
+#   - mp.solutions.pose chi ho tro detect 1 nguoi chinh trong frame.
+#   - Day KHONG phai multi-person detection hoan chinh.
+#   - Phu hop cho demo voi 1-2 nguoi, khong phu hop phong dong > 5 nguoi.
+#
+# Trang thai: Phase 1 SKELETON — flag mac dinh OFF, chua tich hop pipeline.
+
+MULTI_PERSON_CONTROLLER_LOCK_ENABLED = False  # Master flag — OFF mac dinh
+
+# --- Pose detection ---
+POSE_MODEL_COMPLEXITY    = 0        # 0 = lite (nhanh), 1 = full (chinh xac hon)
+POSE_MIN_DETECTION_CONF  = 0.6      # Nguong detection (0.0 - 1.0)
+POSE_MIN_TRACKING_CONF   = 0.5      # Nguong tracking (0.0 - 1.0)
+POSE_PROCESS_EVERY_N_FRAMES = 5     # Khi LOCKED: chay Pose moi N frame (tiet kiem CPU)
+                                    # Khi IDLE/ARMING: chay moi frame
+
+# --- Raised hand detection ---
+CONTROLLER_RAISE_HAND_HOLD_SECS = 3.0   # Gio tay bao lau de lock (giay)
+CONTROLLER_STABLE_FRAMES        = 5     # Frame on dinh truoc khi bat dau dem hold
+CONTROLLER_VISIBILITY_THRESHOLD = 0.7   # Pose landmark visibility toi thieu (0.0 - 1.0)
+
+# --- Lock management ---
+CONTROLLER_LOCK_LOST_GRACE_SECS = 3.0   # Mat controller bao lau thi unlock (giay)
+CONTROLLER_MATCH_THRESHOLD      = 0.15  # Body center match (normalized Euclidean distance)
+                                        # 0.15 = 15% kich thuoc frame
+
+# --- Hand-Person association ---
+HAND_POSE_MATCH_THRESHOLD_PX = 80       # Max pixel distance giua hand wrist va pose wrist
+                                        # ~80px do voi 640x480 frame
+
+# --- Debug overlay ---
+CONTROLLER_DEBUG_OVERLAY = False         # Ve skeleton + lock status len frame
+                                        # Chi bat khi can debug, tang chi phi render
+
