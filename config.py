@@ -505,9 +505,13 @@ RIGHT_CLICK_COOLDOWN      = 1.0     # Cooldown rieng cho right click (giay) — 
 #   - Day KHONG phai multi-person detection hoan chinh.
 #   - Phu hop cho demo voi 1-2 nguoi, khong phu hop phong dong > 5 nguoi.
 #
-# Trang thai: Phase 1 SKELETON — flag mac dinh OFF, chua tich hop pipeline.
+# Trang thai: Phase 1.5 — Debug Overlay Only.
+#   CONTROLLER_DEBUG_ONLY = True: Pose chay, overlay hien thi, nhung
+#   KHONG loc tay, KHONG block gesture, KHONG can thiep pipeline.
 
 MULTI_PERSON_CONTROLLER_LOCK_ENABLED = False  # Master flag — OFF mac dinh
+CONTROLLER_DEBUG_ONLY = True                  # True = chi debug overlay, khong can thiep gesture
+                                              # False = full lock (chua implement, Phase 2)
 
 # --- Pose detection ---
 POSE_MODEL_COMPLEXITY    = 0        # 0 = lite (nhanh), 1 = full (chinh xac hon)
@@ -531,6 +535,6 @@ HAND_POSE_MATCH_THRESHOLD_PX = 80       # Max pixel distance giua hand wrist va 
                                         # ~80px do voi 640x480 frame
 
 # --- Debug overlay ---
-CONTROLLER_DEBUG_OVERLAY = False         # Ve skeleton + lock status len frame
-                                        # Chi bat khi can debug, tang chi phi render
+CONTROLLER_DEBUG_OVERLAY = True          # Ve skeleton + lock status len frame
+                                        # Chi co tac dung khi ENABLED=True
 

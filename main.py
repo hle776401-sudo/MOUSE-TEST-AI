@@ -1033,6 +1033,37 @@ def main():
     _blocked_log_cooldown = {}       # {gesture_name: last_log_timestamp}
     _BLOCKED_LOG_INTERVAL = 3.0      # Chi log moi 3 giay cho cung 1 gesture bi block
 
+    # --- Controller Lock debug (Phase 1.5) ---
+    _cl_pose_tracker = None
+    _cl_lock_manager = None
+    _cl_frame_counter = 0
+    _cl_last_person = None       # PersonPose cuoi cung (de ve overlay khi skip frame)
+    _cl_active = False           # True khi init thanh cong
+    _cl_error_count = 0          # Dem loi lien tuc, disable neu qua nhieu
+
+    if _CONTROLLER_LOCK_MODULES_OK:
+        try:
+            _cl_pose_tracker = PoseTracker(
+                model_complexity=getattr(cfg, 'POSE_MODEL_COMPLEXITY', 0),
+                min_detection_confidence=getattr(cfg, 'POSE_MIN_DETECTION_CONF', 0.6),
+                min_tracking_confidence=getattr(cfg, 'POSE_MIN_TRACKING_CONF', 0.5),
+                visibility_threshold=getattr(cfg, 'CONTROLLER_VISIBILITY_THRESHOLD', 0.7),
+            )
+            _cl_lock_manager = ControllerLockManager(
+                hold_secs=getattr(cfg, 'CONTROLLER_RAISE_HAND_HOLD_SECS', 3.0),
+                grace_secs=getattr(cfg, 'CONTROLLER_LOCK_LOST_GRACE_SECS', 3.0),
+                stable_frames=getattr(cfg, 'CONTROLLER_STABLE_FRAMES', 5),
+                match_threshold=getattr(cfg, 'CONTROLLER_MATCH_THRESHOLD', 0.15),
+            )
+            _cl_active = True
+            print(f"  Controller Lock: DEBUG ONLY "
+                  f"(hold={cfg.CONTROLLER_RAISE_HAND_HOLD_SECS}s, "
+                  f"grace={cfg.CONTROLLER_LOCK_LOST_GRACE_SECS}s)")
+        except Exception as _cl_init_err:
+            print(f"[WARN] Controller Lock init failed: {_cl_init_err}")
+            print("[WARN] Controller Lock disabled, system runs normally")
+            _cl_active = False
+
     # --- Tao cua so OpenCV co kich thuoc co dinh ---
     cv2.namedWindow(cfg.WINDOW_NAME, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(cfg.WINDOW_NAME, cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT)
@@ -1046,6 +1077,29 @@ def main():
                 break
 
             frame = cv2.flip(frame, 1)
+
+            # --- Controller Lock: Pose processing (DEBUG ONLY) ---
+            # Chi observe + overlay, KHONG loc tay, KHONG block gesture
+            if _cl_active:
+                try:
+                    _cl_frame_counter += 1
+                    _pose_n = getattr(cfg, 'POSE_PROCESS_EVERY_N_FRAMES', 5)
+                    # IDLE/ARMING: chay moi frame; LOCKED: chay moi N frame
+                    _should_run = (
+                        _cl_lock_manager.state != "LOCKED" or
+                        _cl_frame_counter % _pose_n == 0
+                    )
+                    if _should_run:
+                        _cl_last_person = _cl_pose_tracker.process(frame)
+                    _cl_lock_manager.update(_cl_last_person)
+                    _cl_error_count = 0  # reset khi thanh cong
+                except Exception as _cl_err:
+                    _cl_error_count += 1
+                    if _cl_error_count <= 3:
+                        print(f"[CTRL_LOCK] Process error #{_cl_error_count}: {_cl_err}")
+                    if _cl_error_count >= 10:
+                        print("[CTRL_LOCK] Too many errors, disabling Pose debug")
+                        _cl_active = False
 
             # --- Context-Aware: cap nhat context (co cache, khong block loop) ---
             if context_manager is not None:
@@ -1590,6 +1644,79 @@ def main():
                     cv2.putText(frame, f"[MIC] Done: {voice_result_text[:35]}",
                                 (10, cfg.CAMERA_HEIGHT - 45),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.COLOR_SUCCESS, 1)
+
+            # --- Controller Lock debug overlay ---
+            if _cl_active and getattr(cfg, 'CONTROLLER_DEBUG_OVERLAY', False):
+                _cl_font = cv2.FONT_HERSHEY_SIMPLEX
+                _cl_state = _cl_lock_manager.state
+                _cl_y_base = 85  # Y position (duoi DEMO MODE badge)
+
+                if _cl_state == "IDLE":
+                    _cl_label = "CTRL LOCK: IDLE"
+                    _cl_color = (180, 180, 180)  # Xam
+                elif _cl_state == "ARMING":
+                    _cl_progress = _cl_lock_manager.get_arming_progress()
+                    _cl_elapsed = _cl_progress * getattr(
+                        cfg, 'CONTROLLER_RAISE_HAND_HOLD_SECS', 3.0)
+                    _cl_hold = getattr(cfg, 'CONTROLLER_RAISE_HAND_HOLD_SECS', 3.0)
+                    _cl_label = f"CTRL LOCK: ARMING {_cl_elapsed:.1f}s / {_cl_hold:.1f}s"
+                    _cl_color = (0, 255, 255)    # Vang
+                elif _cl_state == "LOCKED":
+                    _cl_dur = _cl_lock_manager.get_lock_duration()
+                    _cl_label = f"CTRL LOCK: LOCKED ({_cl_dur:.0f}s)"
+                    _cl_color = (0, 255, 0)      # Xanh la
+                else:
+                    _cl_label = f"CTRL LOCK: {_cl_state}"
+                    _cl_color = (0, 0, 255)      # Do
+
+                # Lost warning
+                if (_cl_state == "LOCKED" and _cl_last_person is None):
+                    _lost_t = time.time() - _cl_lock_manager._last_seen_time
+                    if _lost_t > 0.5:
+                        _cl_label = f"CTRL LOCK: LOST {_lost_t:.1f}s"
+                        _cl_color = (0, 100, 255)  # Cam
+
+                # Background box
+                _cl_text_sz = cv2.getTextSize(_cl_label, _cl_font, 0.5, 1)[0]
+                _cl_x = cfg.CAMERA_WIDTH - _cl_text_sz[0] - 15
+                cv2.rectangle(frame,
+                              (_cl_x - 5, _cl_y_base - _cl_text_sz[1] - 5),
+                              (_cl_x + _cl_text_sz[0] + 5, _cl_y_base + 5),
+                              (30, 30, 30), -1)
+                cv2.putText(frame, _cl_label, (_cl_x, _cl_y_base),
+                            _cl_font, 0.5, _cl_color, 1)
+
+                # Ve diem vai + co tay cua person (neu co)
+                if _cl_last_person is not None:
+                    h_f, w_f = frame.shape[:2]
+                    _pts = [
+                        ("LS", _cl_last_person.left_shoulder),
+                        ("RS", _cl_last_person.right_shoulder),
+                        ("LW", _cl_last_person.left_wrist),
+                        ("RW", _cl_last_person.right_wrist),
+                    ]
+                    for _lbl, _norm in _pts:
+                        _px = int(_norm[0] * w_f)
+                        _py = int(_norm[1] * h_f)
+                        _dot_color = (0, 255, 0) if _cl_state == "LOCKED" else (0, 255, 255)
+                        cv2.circle(frame, (_px, _py), 5, _dot_color, -1)
+                        cv2.putText(frame, _lbl, (_px + 7, _py - 5),
+                                    _cl_font, 0.3, _dot_color, 1)
+
+                    # Line shoulder-wrist khi dang gio tay
+                    if _cl_last_person.is_raising_hand:
+                        if _cl_last_person.raised_side in ("left", "both"):
+                            _ls = (int(_cl_last_person.left_shoulder[0] * w_f),
+                                   int(_cl_last_person.left_shoulder[1] * h_f))
+                            _lw = (int(_cl_last_person.left_wrist[0] * w_f),
+                                   int(_cl_last_person.left_wrist[1] * h_f))
+                            cv2.line(frame, _ls, _lw, (0, 255, 255), 2)
+                        if _cl_last_person.raised_side in ("right", "both"):
+                            _rs = (int(_cl_last_person.right_shoulder[0] * w_f),
+                                   int(_cl_last_person.right_shoulder[1] * h_f))
+                            _rw = (int(_cl_last_person.right_wrist[0] * w_f),
+                                   int(_cl_last_person.right_wrist[1] * h_f))
+                            cv2.line(frame, _rs, _rw, (0, 255, 255), 2)
 
             # --- Hien thi ---
             cv2.imshow(cfg.WINDOW_NAME, frame)
