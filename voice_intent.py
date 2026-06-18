@@ -104,11 +104,11 @@ _INTENT_RULES: list[tuple[str, list[str], bool]] = [
 
     # --- next_action (chuyen tiep / tiep theo / trang tiep) ---
     ("next_action",     ["chuyen tiep", "tiep theo", "trang tiep", "trang sau",
-                         "sang trang", "di tiep"], False),
+                         "sang trang", "di tiep", "qua trang", "trang ke"], False),
 
     # --- previous_action (quay lai / trang truoc / lui lai) ---
     ("previous_action", ["quay lai", "trang truoc", "lui lai", "lui trang",
-                         "quay trang"], False),
+                         "quay trang", "tro ve", "ve truoc", "lui lai"], False),
 
     # --- newline (xuong dong / dong moi) ---
     ("newline",         ["xuong dong", "dong moi"], False),
@@ -140,12 +140,35 @@ _FUZZY_ALIASES: dict[str, str] = {
     "trong truoc":      "previous_action",
     "trang chuc":       "previous_action",
     "tran truoc":       "previous_action",
+    "chang truoc":      "previous_action",
+    "trang chuoc":      "previous_action",
+    "trang chuc":       "previous_action",
+    # --- "quay lại" misrecognized ---
+    "quay lai":         "previous_action",
+    "way lai":          "previous_action",
+    "quay lai quay lai": "previous_action",
+    # --- "lùi lại" / "trở về" / "về trước" misrecognized ---
+    "lui lai":          "previous_action",
+    "tro ve":           "previous_action",
+    "ve truoc":         "previous_action",
+    "cho ve":           "previous_action",
     # --- "trang sau" / "chuyển tiếp" misrecognized as ---
     "trang xau":        "next_action",
     "chang tiep":       "next_action",
     "trang diep":       "next_action",
     "truyen tiep":      "next_action",
     "chuyen diep":      "next_action",
+    "chan tiep":        "next_action",
+    "trang xao":       "next_action",
+    # --- "tiếp theo" / "sang trang" / "trang kế" misrecognized ---
+    "tiep teo":         "next_action",
+    "diep theo":        "next_action",
+    "xang trang":       "next_action",
+    "trang ke":         "next_action",
+    # --- repeated (STT captures echo) ---
+    "trang truoc trang truoc": "previous_action",
+    "trang sau trang sau":     "next_action",
+    "tiep theo tiep theo":     "next_action",
     # --- "tắt hệ thống" partial / misrecognized ---
     "he thong":         "system_off",    # STT missed "tat", most likely intent
     "tat he trong":     "system_off",
@@ -161,9 +184,6 @@ _FUZZY_ALIASES: dict[str, str] = {
     # --- "xuống đoạn" partial ---
     "xuong don":        "new_paragraph",
     "suong doan":       "new_paragraph",
-    # --- "quay lại" misrecognized ---
-    "quay lai":         "previous_action",
-    "way lai":          "previous_action",
 }
 
 
@@ -179,9 +199,16 @@ _KEYWORD_FALLBACK: list[tuple[str, list[str]]] = [
     ("system_on",       ["bat he thong", "he thong bat", "mo he thong"]),
     ("new_paragraph",   ["xuong doan"]),
     ("newline",         ["xuong dong"]),
-    ("next_action",     ["tiep theo", "chuyen tiep", "trang tiep"]),
-    ("previous_action", ["quay lai", "trang truoc"]),
+    ("next_action",     ["tiep theo", "chuyen tiep", "trang tiep",
+                         "sang trang", "qua trang", "trang ke"]),
+    ("previous_action", ["quay lai", "trang truoc", "lui lai",
+                         "tro ve", "ve truoc"]),
 ]
+
+# So tu toi da de keyword fallback (Stage 3) duoc chap nhan.
+# Cau dai hon bi coi la text, khong match command.
+# VD: "hom nay em noi ve trang truoc cua bao cao" (9 tu) -> text, khong phai previous_action.
+_KEYWORD_MAX_WORDS = 5
 
 
 # ==============================================================================
@@ -257,7 +284,15 @@ class VoiceIntentParser:
                               f"{intent_name} query='{raw_query}'")
                         return self._command_result(intent_name, raw_query, raw, norm)
                     else:
-                        # Extra text after exact command -> text (tranh nhan nhau)
+                        # Extra text after exact command
+                        # Kiem tra: neu phan du chinh la prefix lap lai
+                        # VD: "trang sau trang sau" -> remainder = "trang sau" == prefix
+                        _remainder = norm[len(prefix):].strip()
+                        if _remainder == prefix:
+                            print(f"[VOICE_PARSE] REPEAT match: '{norm}' "
+                                  f"('{prefix}' x2) -> {intent_name}")
+                            return self._command_result(intent_name, "", raw, norm)
+                        # Khong phai lap -> text (tranh nhan nhau)
                         return self._text_result(raw, norm)
 
         # --- Stage 2: Fuzzy alias match ---
@@ -267,12 +302,19 @@ class VoiceIntentParser:
             return self._command_result(intent_name, "", raw, norm)
 
         # --- Stage 3: Keyword fallback (contains) ---
-        for intent_name, keywords in _KEYWORD_FALLBACK:
-            for kw in keywords:
-                if kw in norm:
-                    print(f"[VOICE_PARSE] KEYWORD match: '{norm}' "
-                          f"contains '{kw}' -> {intent_name}")
-                    return self._command_result(intent_name, "", raw, norm)
+        # Guard: chi match keyword khi cau ngan (<= _KEYWORD_MAX_WORDS tu)
+        # De tranh "hom nay em noi ve trang truoc cua bao cao" -> previous_action
+        _word_count = len(norm.split())
+        if _word_count <= _KEYWORD_MAX_WORDS:
+            for intent_name, keywords in _KEYWORD_FALLBACK:
+                for kw in keywords:
+                    if kw in norm:
+                        print(f"[VOICE_PARSE] KEYWORD match: '{norm}' "
+                              f"contains '{kw}' -> {intent_name}")
+                        return self._command_result(intent_name, "", raw, norm)
+        else:
+            print(f"[VOICE_PARSE] KEYWORD skip: '{norm}' "
+                  f"has {_word_count} words (max {_KEYWORD_MAX_WORDS}) -> skip keyword stage")
 
         # --- Stage 4: Single-word match ---
         words = norm.split()
@@ -281,8 +323,21 @@ class VoiceIntentParser:
             print(f"[VOICE_PARSE] SINGLE-WORD match: '{norm}' -> {intent_name}")
             return self._command_result(intent_name, "", raw, norm)
 
+        # --- Stage 4.5: Repeated command detection ---
+        # Khi nguoi dung noi lap "trang sau trang sau", STT tra ve chuoi lap.
+        # Kiem tra: neu norm = prefix + " " + prefix thi van match intent.
+        for intent_name, prefixes, needs_query in _INTENT_RULES:
+            if needs_query:
+                continue  # Chi xu ly command khong can query
+            for prefix in prefixes:
+                repeated = prefix + " " + prefix
+                if norm == repeated:
+                    print(f"[VOICE_PARSE] REPEAT match: '{norm}' "
+                          f"('{prefix}' x2) -> {intent_name}")
+                    return self._command_result(intent_name, "", raw, norm)
+
         # --- Stage 5: No match -> text ---
-        print(f"[VOICE_PARSE] NO match: '{norm}' -> type_text (fallback)")
+        print(f"[VOICE_PARSE] COMMAND mode no match, fallback text: '{norm}'")
         return self._text_result(raw, norm)
 
     # ------------------------------------------------------------------

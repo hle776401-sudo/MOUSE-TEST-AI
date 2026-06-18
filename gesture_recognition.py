@@ -1171,11 +1171,18 @@ class SecondaryHandRecognizer:
         self._prev_hand_center = None
         self.current_gesture = GESTURE_NONE
 
-        # --- Voice Trigger ---
+        # --- Voice Trigger (Command) ---
         self._vtrigger_start_time: float = 0.0
         self._vtrigger_active: bool = False
         self._vtrigger_cooldown_time: float = 0.0
         self.voice_trigger_fired: bool = False  # main.py poll va reset flag nay
+
+        # --- Text Voice Trigger (pose chu L [1,1,0,0,0]) ---
+        self._text_vtrigger_start_time: float = 0.0
+        self._text_vtrigger_active: bool = False
+        self._text_vtrigger_cooldown_time: float = 0.0
+        self._text_vtrigger_stable_count: int = 0
+        self.text_voice_trigger_fired: bool = False  # main.py poll va reset flag nay
 
     def recognize(self, landmark_list, fingers, palm_size=0, hand_center=None):
         """
@@ -1221,6 +1228,11 @@ class SecondaryHandRecognizer:
                 _is_gesture_enabled('voice_trigger_g')):
             self._check_voice_trigger(fingers, now)
 
+        # --- TEXT VOICE TRIGGER (pose chu L [1,1,0,0,0]) ---
+        if (getattr(cfg, "VOICE_TEXT_TRIGGER_ENABLED", False) and
+                _is_gesture_enabled('voice_text_trigger_g')):
+            self._check_text_voice_trigger(fingers, now)
+
         # Post-action cooldown (respects DEMO_MODE multiplier)
         eff_pac = _get_effective_cooldown(cfg.POST_ACTION_COOLDOWN, is_post_action=True)
         if not cooldown_passed(self._post_action_time, eff_pac, now):
@@ -1238,17 +1250,7 @@ class SecondaryHandRecognizer:
 
         pinch_enter = self._get_pinch_threshold(palm_size)
 
-        # --- ZOOM (uu tien truoc swipe) ---
-        if _is_gesture_enabled('zoom'):
-            zoom_result = self._check_zoom(fingers, thumb_index_dist,
-                                            thumb_middle_dist, pinch_enter, now)
-            if zoom_result is not None:
-                result["gesture"] = zoom_result
-                self.current_gesture = zoom_result
-                self._prev_hand_center = hand_center
-                return result
-
-        # --- SWIPE ---
+        # --- SWIPE (uu tien truoc zoom) ---
         if _is_gesture_enabled('swipe'):
             swipe_result = self._check_swipe(fingers, hand_center, now)
             if swipe_result is not None:
@@ -1256,6 +1258,19 @@ class SecondaryHandRecognizer:
                 self.current_gesture = swipe_result
                 self._prev_hand_center = hand_center
                 return result
+
+        # --- ZOOM (sau swipe, co guard text voice trigger) ---
+        if _is_gesture_enabled('zoom'):
+            # Guard: neu text voice trigger dang holding -> khong xu ly zoom
+            # Pose chu L [1,1,0,0,0] co the bi MediaPipe nhan nhay -> block zoom
+            if not self._text_vtrigger_active:
+                zoom_result = self._check_zoom(fingers, thumb_index_dist,
+                                                thumb_middle_dist, pinch_enter, now)
+                if zoom_result is not None:
+                    result["gesture"] = zoom_result
+                    self.current_gesture = zoom_result
+                    self._prev_hand_center = hand_center
+                    return result
 
         self.current_gesture = GESTURE_NONE
         self._prev_hand_center = hand_center
@@ -1303,6 +1318,60 @@ class SecondaryHandRecognizer:
             self._vtrigger_cooldown_time = now
             self.voice_trigger_fired = True   # main.py se doc va reset
             print("[GESTURE] Voice Trigger fired (hold %.2fs)" % elapsed)
+            return True
+
+        return False
+
+    # --- Text Voice Trigger (pose chu L) ---
+    def _check_text_voice_trigger(self, fingers, now) -> bool:
+        """Kiem tra pose chu L [1,1,0,0,0] giu VOICE_TEXT_TRIGGER_HOLD_SECS.
+
+        Guard chong xung dot Zoom: fingers[2] PHAI == 0 (middle cup).
+        Side-effect: set self.text_voice_trigger_fired = True khi triggered.
+        Khong return gesture, khong chiem pipeline.
+
+        Args:
+            fingers: List 5 gia tri [0/1] cho cac ngon tay.
+            now:     time.time() hien tai.
+
+        Returns:
+            True frame triggered, False cac truong hop con lai.
+        """
+        pose = getattr(cfg, "VOICE_TEXT_TRIGGER_PATTERN", [1, 1, 0, 0, 0])
+        hold = getattr(cfg, "VOICE_TEXT_TRIGGER_HOLD_SECS", 2.0)
+        cooldown = getattr(cfg, "VOICE_TEXT_TRIGGER_COOLDOWN", 4.0)
+        min_stable = getattr(cfg, "VOICE_TEXT_TRIGGER_STABLE_FRAMES", 6)
+
+        # Guard: pose PHAI khop chinh xac va middle PHAI cup (chong nham Zoom)
+        if list(fingers) != list(pose) or fingers[2] != 0:
+            self._text_vtrigger_active = False
+            self._text_vtrigger_start_time = 0.0
+            self._text_vtrigger_stable_count = 0
+            return False
+
+        # Dang trong cooldown
+        if not cooldown_passed(self._text_vtrigger_cooldown_time, cooldown, now):
+            return False
+
+        # Dem stable frames
+        self._text_vtrigger_stable_count += 1
+        if self._text_vtrigger_stable_count < min_stable:
+            return False
+
+        # Bat dau dem hold time
+        if not self._text_vtrigger_active:
+            self._text_vtrigger_start_time = now
+            self._text_vtrigger_active = True
+            return False
+
+        # Kiem tra da giu du thoi gian chua
+        elapsed = now - self._text_vtrigger_start_time
+        if elapsed >= hold:
+            self._text_vtrigger_active = False
+            self._text_vtrigger_cooldown_time = now
+            self._text_vtrigger_stable_count = 0
+            self.text_voice_trigger_fired = True  # main.py se doc va reset
+            print("[GESTURE] Text Voice Trigger fired (hold %.2fs)" % elapsed)
             return True
 
         return False
@@ -1739,6 +1808,10 @@ class SecondaryHandRecognizer:
         # Voice Trigger: reset active/start_time, KHONG reset cooldown/voice_trigger_fired
         self._vtrigger_active = False
         self._vtrigger_start_time = 0.0
+        # Text Voice Trigger: reset active/start_time/stable, KHONG reset cooldown/fired
+        self._text_vtrigger_active = False
+        self._text_vtrigger_start_time = 0.0
+        self._text_vtrigger_stable_count = 0
 
 
 # ==============================================================================
